@@ -5,7 +5,12 @@ mod camera_controller;
 
 use std::f32::consts::PI;
 
-use bevy::{color::palettes, math::NormedVectorSpace, prelude::*, utils::HashMap};
+use bevy::{
+    color::palettes,
+    math::{NormedVectorSpace, VectorSpace},
+    prelude::*,
+    utils::HashMap,
+};
 use camera_controller::{CameraController, CameraControllerPlugin};
 
 fn main() {
@@ -13,7 +18,10 @@ fn main() {
         .init_resource::<Colors>()
         .add_plugins((DefaultPlugins, CameraControllerPlugin))
         .add_systems(Startup, setup)
-        .add_systems(Update, (update, move_balls, despawn_balls).chain())
+        .add_systems(
+            Update,
+            (update, move_balls, despawn_balls, show_signal).chain(),
+        )
         .observe(spinny_boy)
         .run();
 }
@@ -115,9 +123,74 @@ fn setup(mut commands: Commands) {
     ));
 }
 
-fn x(n: f32) -> f32 {
-    let k = 5.0;
-    (2. * PI * k * n).sin()
+fn x(t: f32, f: f32) -> f32 {
+    ((2. * PI * f * t).sin()
+        + (0.1 * (2. * PI * f * 7. * t).sin())
+        + (0.1 * (2. * PI * f * 13. * t).cos()))
+        / 1.20
+}
+
+fn show_signal(mut gizmos: Gizmos, t: Res<Time>) {
+    let t = t.elapsed_seconds() * 25.0;
+
+    gizmos.grid_2d(
+        Vec2::ZERO, // Add some bias to avoid flicker
+        0.0,
+        UVec2::new(100, 100),
+        Vec2::ONE,
+        palettes::tailwind::BLUE_200.with_alpha(0.01),
+    );
+
+    let bias = 0.01;
+
+    let freqs = [1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 25.0];
+    for (index, freq) in freqs.iter().enumerate() {
+        // VARS
+        let y_scaling = 2.5;
+        let y_span = freqs.len() as f32 * y_scaling;
+        let y_offset = index as f32 * y_scaling - (y_span / 2.);
+        let width = 20.0;
+        let num_ms = 1000;
+        let dx = width / num_ms as f32;
+
+        // DRAW SIGNAL
+        fn ms_to_signal(ms: u64, freq: f32) -> f32 {
+            x(ms as f32 / 1000.0, freq)
+        }
+
+        let positions = (0..num_ms).into_iter().map(|ms| {
+            let x = ms as f32 * dx - width / 2.;
+            Vec2::new(x, ms_to_signal(ms + t as u64, *freq) + y_offset).extend(bias)
+        });
+
+        gizmos.linestrip(positions, palettes::tailwind::INDIGO_500.with_alpha(0.3));
+
+        // SAMPLE SIGNAL
+        let samples = (0..num_ms)
+            .into_iter()
+            .step_by(10)
+            .map(|ms| {
+                let x = ms as f32 * dx - width / 2.;
+                Vec2::new(x, ms_to_signal(ms + t as u64, *freq) + y_offset).extend(bias)
+            })
+            .collect::<Vec<_>>();
+
+        for sample in &samples {
+            gizmos
+                .sphere(*sample, Quat::default(), 0.05, palettes::tailwind::RED_600)
+                .resolution(3);
+        }
+
+        let lines = samples
+            .windows(2)
+            .map::<&[Vec3; 2], _>(|w| w.try_into().unwrap())
+            .flat_map(|[sample0, sample1]| [*sample0, Vec3::new(sample1.x, sample0.y, bias)]);
+
+        gizmos.linestrip(
+            lines.chain([*samples.last().unwrap()]),
+            palettes::tailwind::RED_600,
+        );
+    }
 }
 
 fn update(
@@ -127,6 +200,8 @@ fn update(
     // colors: Res<Colors>,
     mut iter: Local<usize>,
 ) {
+    return;
+
     let mut max_sum = -1.0;
     let mut max_k = usize::MAX;
 
@@ -143,7 +218,7 @@ fn update(
             let n = n as f32;
             let k = k as f32;
 
-            sum += x(n) * (2. * PI * k * n / N as f32).cos();
+            // sum += x(n) * (2. * PI * k * n / N as f32).cos();
 
             // let freq = index as f32 / 10.0;
             // // let start = Vec3::new(index as f32, 0.0, 0.0);
