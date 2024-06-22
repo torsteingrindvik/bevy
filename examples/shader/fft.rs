@@ -5,109 +5,300 @@ mod camera_controller;
 
 use std::f32::consts::PI;
 
-use bevy::{
-    color::palettes,
-    math::{NormedVectorSpace, VectorSpace},
-    prelude::*,
-    utils::HashMap,
-};
+use bevy::{color::palettes, prelude::*};
 use camera_controller::{CameraController, CameraControllerPlugin};
 
 fn main() {
     App::new()
-        .init_resource::<Colors>()
+        .insert_resource(DisplaySettings {
+            time_scaling: 3.0,
+            amplitude_scaling: 3.0,
+        })
         .add_plugins((DefaultPlugins, CameraControllerPlugin))
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, spawn_signals))
         .add_systems(
             Update,
-            (update, move_balls, despawn_balls, show_signal).chain(),
+            (
+                show_grid,
+                update_true_signal,
+                resample,
+                calc_fft,
+                show_signals,
+                spawn_bins,
+                show_ffts,
+            )
+                .chain(),
         )
-        .observe(spinny_boy)
         .run();
 }
 
-#[derive(Debug, Event)]
-struct FourierEval {
-    index: usize,
-    pos: Vec3,
+#[derive(Debug, Component)]
+struct FftSettings {
+    bins: usize,
+    max_freq: f32,
+
+    display_width: f32,
+    normalized_height: f32,
+    xy_offset: Vec2,
 }
 
 #[derive(Debug, Component)]
-struct Ballz;
-
-#[derive(Debug, Resource, Deref)]
-struct Colors(HashMap<usize, Color>);
-
-impl Default for Colors {
-    fn default() -> Self {
-        Self(HashMap::from_iter(
-            [
-                palettes::tailwind::CYAN_100,
-                palettes::tailwind::EMERALD_300,
-                palettes::tailwind::FUCHSIA_400,
-                palettes::tailwind::GREEN_300,
-                palettes::tailwind::NEUTRAL_500,
-                palettes::tailwind::ORANGE_400,
-                palettes::tailwind::ROSE_700,
-                palettes::tailwind::ROSE_700,
-                palettes::tailwind::SKY_800,
-                palettes::tailwind::YELLOW_500,
-            ]
-            .into_iter()
-            .map(Into::into)
-            .enumerate(),
-        ))
-    }
+struct FftResult {
+    results: Vec<f32>,
 }
 
-fn spinny_boy(
-    trigger: Trigger<FourierEval>,
-    colors: Res<Colors>,
+#[derive(Debug, Component)]
+struct DisplayColor {
+    color: Color,
+}
+
+#[derive(Debug, Component)]
+struct FftBin;
+
+fn spawn_bins(
     mut commands: Commands,
+    has_changed_fft: Query<(Entity, &FftSettings, &DisplayColor), Changed<FftSettings>>,
+    mut mesh: Local<Option<Handle<Mesh>>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut mesh: Local<Option<Handle<Mesh>>>,
-    mut mat: Local<HashMap<usize, Handle<StandardMaterial>>>,
 ) {
-    let FourierEval { index, pos } = trigger.event();
-
-    let mesh_handle = mesh
-        .get_or_insert(meshes.add(Sphere::default().mesh().ico(5).unwrap()))
-        .clone_weak();
-    let mat_handle = mat
-        .entry(*index)
-        .or_insert_with(|| {
-            materials.add({
-                let mut mat = StandardMaterial::from(colors[index]);
-                mat.unlit = true;
-                mat
-            })
+    let mesh = mesh
+        .get_or_insert_with(|| {
+            meshes.add(
+                Cylinder {
+                    radius: 8.0,
+                    half_height: 0.5,
+                }
+                .mesh(),
+            )
         })
         .clone_weak();
 
-    commands.spawn((
-        PbrBundle {
-            mesh: mesh_handle,
-            material: mat_handle,
-            transform: Transform::from_translation(*pos).with_scale(Vec3::splat(0.025)),
-            ..default()
+    for (entity, settings, display) in &has_changed_fft {
+        info!("Resetting");
+        let mut sm = StandardMaterial::from(display.color);
+        sm.unlit = true;
+        let material = materials.add(sm);
+
+        // Reset
+        commands
+            .entity(entity)
+            .despawn_descendants()
+            .with_children(|parent| {
+                for _ in 0..settings.bins {
+                    parent.spawn((
+                        PbrBundle {
+                            mesh: mesh.clone_weak(),
+                            material: material.clone(),
+                            ..default()
+                        },
+                        FftBin,
+                    ));
+                }
+            });
+    }
+}
+
+fn show_ffts(
+    time: Res<Time>,
+    ffts: Query<(Entity, &FftResult, &FftSettings)>,
+    children: Query<&Children>,
+    mut transforms: Query<&mut Transform, With<FftBin>>,
+) {
+    for (
+        entity,
+        fft,
+        &FftSettings {
+            bins,
+            display_width,
+            normalized_height,
+            xy_offset,
+            ..
         },
-        Ballz,
+    ) in &ffts
+    {
+        let num_results = fft.results.len();
+        assert_eq!(num_results, bins);
+
+        let max_height = fft
+            .results
+            .iter()
+            .copied()
+            // .map(|v| v.log10())
+            .reduce(f32::max)
+            .unwrap();
+        let scaling = 1. / max_height * normalized_height;
+
+        for (index, (bin, &result)) in children
+            .iter_descendants(entity)
+            .zip(&fft.results)
+            .enumerate()
+        {
+            let x_pos = (index as f32) / (bins as f32) * display_width;
+
+            // Do an average using next and prev bin to smooth things out a bit
+            let this = result;
+            let prev = fft.results[index.saturating_sub(1)];
+            let next = fft.results[(index + 1).min(bins - 1)];
+            let height = ((this + prev + next) / 3.).max(0.0) * scaling;
+
+            let edge_length = 1. / bins as f32;
+            let translation =
+                (xy_offset + Vec2::new(x_pos, 1.0 + height / 2.)).extend(-edge_length / 2.);
+
+            let scale = Vec3::new(edge_length, height, edge_length);
+
+            let mut transform = transforms.get_mut(bin).unwrap();
+
+            let mut new_transform = transform.with_translation(translation).with_scale(scale);
+            new_transform.rotate_axis(Dir3::Y, time.delta_seconds() * 1.0);
+
+            *transform = new_transform;
+        }
+    }
+}
+
+fn spawn_signals(mut commands: Commands) {
+    let true_signal_sample_time = 10.0;
+    let true_signal_frequency = 2000.0;
+
+    commands.spawn((
+        SignalSettings {
+            frequency: true_signal_frequency,
+            sample_time: true_signal_sample_time,
+            time_offset: 0.0,
+        },
+        SignalDisplay {
+            depth_bias: 0.0,
+            style: DisplayStyle::Shortest,
+            amplitude_offset: 0.0,
+        },
+        DisplayColor {
+            color: palettes::tailwind::INDIGO_500.with_alpha(0.3).into(),
+        },
     ));
+
+    use palettes::tailwind as colors;
+    let colors = [
+        colors::LIME_200,
+        colors::GREEN_500,
+        colors::RED_600,
+        colors::BLUE_200,
+        colors::ORANGE_500,
+        colors::PINK_400,
+    ];
+
+    for (index, color) in colors.iter().enumerate() {
+        let mut cmds = commands.spawn((
+            SpatialBundle::default(),
+            SignalSettings {
+                frequency: true_signal_frequency / (2.0f32).powi((index + 1) as i32),
+                sample_time: true_signal_sample_time / 2.,
+                time_offset: true_signal_sample_time / 4.,
+            },
+            SignalDisplay {
+                depth_bias: 0.1 * ((index + 1) as f32),
+                style: DisplayStyle::Flat,
+                amplitude_offset: -0.1 * (index as f32),
+            },
+            DisplayColor {
+                color: (*color).into(),
+            },
+        ));
+
+        if index == 0 {
+            // Use this one for the Fft calc
+            cmds.insert(FftSettings {
+                bins: 300,
+                display_width: 20.0,
+                normalized_height: 7.5,
+                max_freq: 128.0,
+                xy_offset: Vec2::new(2.0, 1.0),
+            });
+        }
+    }
 }
 
-fn move_balls(t: Res<Time>, mut q: Query<&mut Transform, With<Ballz>>) {
-    let dt = t.delta_seconds();
+fn resample(
+    mut commands: Commands,
+    changed_signals: Query<(Entity, &SignalSettings)>,
+    input_signal: Res<TrueSignal>,
+) {
+    for (entity, settings) in &changed_signals {
+        let num_samples = settings.num_samples();
 
-    q.par_iter_mut().for_each(|mut transform| {
-        transform.translation += dt * Vec3::NEG_Z * 1.5;
-    });
+        let samples = (0..num_samples)
+            .into_iter()
+            .map(|sample| (sample as f32 / num_samples as f32) * settings.sample_time)
+            .map(|t| (input_signal.f)(t + settings.time_offset))
+            .collect();
+
+        commands.entity(entity).insert(Samples { samples });
+    }
 }
 
-fn despawn_balls(mut commands: Commands, q: Query<(Entity, &Transform), With<Ballz>>) {
-    for (entity, transform) in &q {
-        if transform.translation.z < -10.0 {
-            commands.entity(entity).despawn();
+fn calc_fft(mut commands: Commands, signal: Query<(Entity, &Samples, &FftSettings)>) {
+    let (entity, signal, fft_settings) = signal.single();
+    let num_samples = signal.samples.len();
+
+    let mut results = vec![];
+
+    // E.g.:
+    //  * 300 max freq + 100 bins -> each bin strides 3 Hz
+    //  * 100 max freq + 250 bins -> each bin strides 0.4 Hz
+    let per_bin_freq = fft_settings.max_freq / fft_settings.bins as f32;
+
+    for k in 0..fft_settings.bins {
+        let f = k as f32 * per_bin_freq;
+        let mut sum = Vec2::ZERO;
+        for n in 0..num_samples {
+            // p ∈ [0.0, 1.0)
+            let p = n as f32 / num_samples as f32;
+            let (re, im) = (2.0 * PI * f * p).sin_cos();
+            let test_signal = Vec2::new(-im, re);
+
+            sum += test_signal * signal.samples[n];
+        }
+        results.push(sum.length());
+    }
+
+    commands.entity(entity).insert(FftResult { results });
+}
+
+fn show_signals(
+    mut gizmos: Gizmos,
+    signals: Query<(&Samples, &SignalSettings, &SignalDisplay, &DisplayColor)>,
+    display: Res<DisplaySettings>,
+) {
+    for (signal, settings, signal_display, display_color) in &signals {
+        let positions = signal.samples.iter().enumerate().map(|(n, &amplitude)| {
+            Vec3::new(
+                ((n as f32 / settings.frequency) + settings.time_offset) * display.time_scaling,
+                (amplitude + signal_display.amplitude_offset) * display.amplitude_scaling,
+                signal_display.depth_bias, // Avoids Z fighting
+            )
+        });
+
+        match signal_display.style {
+            DisplayStyle::Shortest => {
+                gizmos.linestrip(positions, display_color.color);
+            }
+            DisplayStyle::Flat => {
+                let lines = positions.collect::<Vec<_>>();
+                let last = lines.last().unwrap();
+                let lines = lines
+                    .windows(2)
+                    .map::<&[Vec3; 2], _>(|w| w.try_into().unwrap())
+                    .flat_map(|[sample0, sample1]| {
+                        [
+                            *sample0,
+                            Vec3::new(sample1.x, sample0.y, signal_display.depth_bias),
+                        ]
+                    })
+                    .chain([*last]);
+
+                gizmos.linestrip(lines, display_color.color);
+            }
         }
     }
 }
@@ -121,148 +312,95 @@ fn setup(mut commands: Commands) {
         },
         CameraController::default(),
     ));
+
+    // commands.spawn(PointLightBundle {
+    //     point_light: PointLight {
+    //         shadows_enabled: true,
+    //         intensity: 10_000_000.,
+    //         range: 1000.0,
+    //         shadow_depth_bias: 0.2,
+    //         ..default()
+    //     },
+    //     transform: Transform::from_xyz(8.0, 16.0, 8.0),
+    //     ..default()
+    // });
 }
 
-fn x(t: f32, f: f32) -> f32 {
-    ((2. * PI * f * t).sin()
-        + (0.1 * (2. * PI * f * 7. * t).sin())
-        + (0.1 * (2. * PI * f * 13. * t).cos()))
-        / 1.20
+#[derive(Resource)]
+struct TrueSignal {
+    f: Box<dyn Fn(f32) -> f32 + 'static + Send + Sync>,
 }
 
-fn show_signal(mut gizmos: Gizmos, t: Res<Time>) {
-    let t = t.elapsed_seconds() * 25.0;
+fn update_true_signal(mut commands: Commands, time: Res<Time>) {
+    let sin = |t, f| {
+        let t: f32 = 2.0 * PI * t * f;
+        t.sin()
+    };
 
+    let varying = 3.0 + (time.elapsed_seconds() / 4.).sin();
+
+    let hifreq = 20.0 + (time.elapsed_seconds()).sin();
+
+    commands.insert_resource(TrueSignal {
+        f: Box::new(move |t| {
+            (sin(t, 1.0) * 2.0 + sin(t, varying) * 0.5 + sin(t, 7.0) * 0.25 + sin(t, hifreq) * 0.1)
+                / 6.0
+        }),
+    });
+}
+
+#[derive(Debug, Component)]
+struct Samples {
+    samples: Vec<f32>,
+}
+
+#[derive(Debug, Component)]
+struct SignalSettings {
+    frequency: f32,
+    sample_time: f32,
+    time_offset: f32,
+}
+
+impl SignalSettings {
+    fn num_samples(&self) -> usize {
+        // E.g. 500 Hz * 2.0 secs -> 1000 samples
+        (self.frequency * self.sample_time) as usize
+    }
+}
+
+#[derive(Debug)]
+enum DisplayStyle {
+    /// Linestrip directly connecting each point
+    Shortest,
+
+    /// Linestrip but only horizontal or vertical line pieces
+    Flat,
+}
+
+#[derive(Debug, Component)]
+struct SignalDisplay {
+    depth_bias: f32,
+    style: DisplayStyle,
+    amplitude_offset: f32,
+}
+
+fn show_grid(mut gizmos: Gizmos) {
     gizmos.grid_2d(
-        Vec2::ZERO, // Add some bias to avoid flicker
+        Vec2::ZERO,
         0.0,
         UVec2::new(100, 100),
         Vec2::ONE,
         palettes::tailwind::BLUE_200.with_alpha(0.01),
     );
-
-    let bias = 0.01;
-
-    let freqs = [1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 25.0];
-    for (index, freq) in freqs.iter().enumerate() {
-        // VARS
-        let y_scaling = 2.5;
-        let y_span = freqs.len() as f32 * y_scaling;
-        let y_offset = index as f32 * y_scaling - (y_span / 2.);
-        let width = 20.0;
-        let num_ms = 1000;
-        let dx = width / num_ms as f32;
-
-        // DRAW SIGNAL
-        fn ms_to_signal(ms: u64, freq: f32) -> f32 {
-            x(ms as f32 / 1000.0, freq)
-        }
-
-        let positions = (0..num_ms).into_iter().map(|ms| {
-            let x = ms as f32 * dx - width / 2.;
-            Vec2::new(x, ms_to_signal(ms + t as u64, *freq) + y_offset).extend(bias)
-        });
-
-        gizmos.linestrip(positions, palettes::tailwind::INDIGO_500.with_alpha(0.3));
-
-        // SAMPLE SIGNAL
-        let samples = (0..num_ms)
-            .into_iter()
-            .step_by(10)
-            .map(|ms| {
-                let x = ms as f32 * dx - width / 2.;
-                Vec2::new(x, ms_to_signal(ms + t as u64, *freq) + y_offset).extend(bias)
-            })
-            .collect::<Vec<_>>();
-
-        for sample in &samples {
-            gizmos
-                .sphere(*sample, Quat::default(), 0.05, palettes::tailwind::RED_600)
-                .resolution(3);
-        }
-
-        let lines = samples
-            .windows(2)
-            .map::<&[Vec3; 2], _>(|w| w.try_into().unwrap())
-            .flat_map(|[sample0, sample1]| [*sample0, Vec3::new(sample1.x, sample0.y, bias)]);
-
-        gizmos.linestrip(
-            lines.chain([*samples.last().unwrap()]),
-            palettes::tailwind::RED_600,
-        );
-    }
 }
 
-fn update(
-    // mut commands: Commands,
-    // mut gizmos: Gizmos,
-    // t: Res<Time>,
-    // colors: Res<Colors>,
-    mut iter: Local<usize>,
-) {
-    return;
+#[derive(Debug, Resource)]
+struct DisplaySettings {
+    /// How wide should a signal's time axis be.
+    /// E.g. 1000 samples at 1 kHz is 1 second,
+    /// and the width of that is 1 second times scaling.
+    time_scaling: f32,
 
-    let mut max_sum = -1.0;
-    let mut max_k = usize::MAX;
-
-    const N: usize = 10000;
-
-    if *iter == 0 {
-        info!("gooing for it");
-    }
-
-    for k in 1..=(N / 2) {
-        let mut sum = 0.0;
-
-        for n in 0..N {
-            let n = n as f32;
-            let k = k as f32;
-
-            // sum += x(n) * (2. * PI * k * n / N as f32).cos();
-
-            // let freq = index as f32 / 10.0;
-            // // let start = Vec3::new(index as f32, 0.0, 0.0);
-
-            // let mut sum = 0.0;
-            // for t in 0..100_000 {
-            //     let t = t as f32 / 1000.0;
-
-            //     let re = (freq * t * std::f32::consts::TAU).cos();
-            //     // sum += g(t) * Vec2::new(re, im).length();
-            //     sum += g(t) * re;
-            // }
-
-            // // sum /= 1000.0;
-
-            // // let pos = center + Vec3::new(re, im, 0.0) * amplitude * signal;
-
-            // // let color = colors[&index];
-            // let ampl = Vec3::Y * sum;
-            // // gizmos.arrow(start, start + ampl, color);
-
-            // // commands.trigger(FourierEval { pos: ampl, index });
-
-            // if *iter == 0 {
-            //     info!("f:{freq:.2}, index {index}, sum:{sum:.2}");
-            // }
-            // if sum > max_sum {
-            //     max_sum = sum;
-            //     max_index = index;
-            // }
-        }
-
-        // sum *= 2.0;
-        // sum /= N as f32;
-
-        if sum > max_sum {
-            max_sum = sum;
-            max_k = k;
-        }
-    }
-
-    if *iter == 0 {
-        info!("max sum: {max_sum:.8} @ {max_k}");
-    }
-
-    *iter += 1;
+    /// Scales height of amplitudes
+    amplitude_scaling: f32,
 }
