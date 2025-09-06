@@ -3,52 +3,24 @@
 //! and how to change the UV mapping at run-time.
 
 use bevy::{
-    asset::RenderAssetUsages,
-    color::palettes,
-    core_pipeline::Skybox,
-    core_widgets::CoreSlider,
-    mesh::{Indices, VertexAttributeValues},
-    prelude::*,
-    render::render_resource::PrimitiveTopology,
+    asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, core_widgets::CoreSlider,
+    mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
 };
 use bevy::{
-    core_widgets::{
-        Activate, Callback, CoreRadio, CoreRadioGroup, CoreWidgetsPlugins, SliderPrecision,
-        SliderStep, SliderValue, ValueChange,
-    },
+    core_widgets::{CoreWidgetsPlugins, SliderPrecision, SliderStep, SliderValue},
     feathers::{
-        controls::{
-            button, checkbox, color_slider, color_swatch, radio, slider, toggle_switch,
-            ButtonProps, ButtonVariant, CheckboxProps, ColorChannel, ColorSlider, ColorSliderProps,
-            ColorSwatch, SliderBaseColor, SliderProps, ToggleSwitchProps,
-        },
+        controls::{slider, SliderProps},
         dark_theme::create_dark_theme,
-        rounded_corners::RoundedCorners,
-        theme::{ThemeBackgroundColor, ThemedText, UiTheme},
+        theme::{ThemeBackgroundColor, UiTheme},
         tokens, FeathersPlugin,
     },
     input_focus::{
         tab_navigation::{TabGroup, TabNavigationPlugin},
         InputDispatchPlugin,
     },
-    prelude::*,
-    ui::{Checked, InteractionDisabled},
 };
 use bevy_image::ImageLoaderSettings;
 use bevy_render::view::Hdr;
-
-/// A struct to hold the state of various widgets shown in the demo.
-#[derive(Resource)]
-struct DemoWidgetStates {
-    rgb_color: Srgba,
-    hsl_color: Hsla,
-}
-
-#[derive(Component, Clone, Copy, PartialEq)]
-enum SwatchType {
-    Rgb,
-    Hsl,
-}
 
 const UI_TEXT_SMALL: f32 = 12.0;
 const UI_TEXT_BIG: f32 = 16.0;
@@ -105,15 +77,10 @@ fn main() {
             FeathersPlugin,
         ))
         .insert_resource(UiTheme(create_dark_theme()))
-        .insert_resource(DemoWidgetStates {
-            rgb_color: palettes::tailwind::EMERALD_800.with_alpha(0.7),
-            hsl_color: palettes::tailwind::AMBER_800.into(),
-        })
         .add_systems(Startup, setup)
         .add_systems(Update, input_handler)
         .add_systems(Update, up_down)
         .add_systems(Update, draw_axes)
-        .add_systems(Update, update_colors)
         .add_systems(Update, generate_checkerboard)
         .add_systems(Update, update_rows_cols_from_sliders)
         .add_systems(Update, update_square_size_from_slider)
@@ -180,7 +147,7 @@ fn setup(
     commands.spawn((
         Mesh3d(checkboard_handle),
         MeshMaterial3d(materials.add(StandardMaterial {
-            clearcoat: 0.0,
+            clearcoat: 1.0,
             clearcoat_perceptual_roughness: 0.3,
             clearcoat_normal_texture: Some(asset_server.load_with_settings(
                 "textures/ScratchedGold-Normal.png",
@@ -188,7 +155,7 @@ fn setup(
             )),
             metallic: 0.9,
             perceptual_roughness: 0.1,
-            // base_color: palettes::css::GOLD.into(),
+            base_color: palettes::css::GOLD.into(),
             ..default()
         })),
         UpDown,
@@ -226,19 +193,7 @@ fn setup(
     // Light up the scene.
     commands.spawn((PointLight::default(), camera_and_light_transform));
 
-    // Text to describe the controls.
-    commands.spawn((
-        Text::new("Controls:\nSpace: Change UVs\nX/Y/Z: Rotate\nR: Reset orientation"),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(12),
-            left: px(12),
-            ..default()
-        },
-    ));
-
-    let root = demo_root(&mut commands);
-    commands.spawn(root);
+    commands.spawn(demo_root());
 
     commands.spawn(Sprite::from_image(asset_server.load("branding/icon.png")));
 }
@@ -247,16 +202,10 @@ fn setup(
 // check out examples/input/ for more examples about user input.
 fn input_handler(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mesh_query: Query<&Mesh3d, With<CustomUV>>,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut query: Query<&mut Transform, With<CustomUV>>,
     time: Res<Time>,
 ) {
-    if keyboard_input.just_pressed(KeyCode::Space) {
-        let mesh_handle = mesh_query.single().expect("Query not successful");
-        // let mesh = meshes.get_mut(mesh_handle).unwrap();
-        // toggle_texture(mesh);
-    }
+    if keyboard_input.just_pressed(KeyCode::Space) {}
     if keyboard_input.pressed(KeyCode::KeyX) {
         for mut transform in &mut query {
             transform.rotate_x(time.delta_secs() / 1.2);
@@ -309,6 +258,7 @@ fn create_checkerboard(settings: CheckerboardSettings) -> Mesh {
 
     let mut positions = vec![];
     let mut normals = vec![];
+    let mut uvs = vec![];
     let mut colors = vec![];
     let mut indices = vec![];
 
@@ -323,7 +273,7 @@ fn create_checkerboard(settings: CheckerboardSettings) -> Mesh {
 
                     positions.push(Vec3::new(x, 0.0, z));
                     normals.push(Vec3::Y);
-
+                    uvs.push([x / cols as f32, z / rows as f32]);
                     colors.push(color(col, row, false));
                 }
             }
@@ -355,78 +305,11 @@ fn create_checkerboard(settings: CheckerboardSettings) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
     .with_inserted_indices(Indices::U16(indices))
 }
 
-fn demo_root(commands: &mut Commands) -> impl Bundle {
-    // Update radio button states based on notification from radio group.
-    let radio_exclusion = commands.register_system(
-        |ent: In<Activate>, q_radio: Query<Entity, With<CoreRadio>>, mut commands: Commands| {
-            for radio in q_radio.iter() {
-                if radio == ent.0 .0 {
-                    commands.entity(radio).insert(Checked);
-                } else {
-                    commands.entity(radio).remove::<Checked>();
-                }
-            }
-        },
-    );
-
-    let change_red = commands.register_system(
-        |change: In<ValueChange<f32>>, mut color: ResMut<DemoWidgetStates>| {
-            color.rgb_color.red = change.value;
-        },
-    );
-
-    let change_green = commands.register_system(
-        |change: In<ValueChange<f32>>, mut color: ResMut<DemoWidgetStates>| {
-            color.rgb_color.green = change.value;
-        },
-    );
-
-    let change_blue = commands.register_system(
-        |change: In<ValueChange<f32>>, mut color: ResMut<DemoWidgetStates>| {
-            color.rgb_color.blue = change.value;
-        },
-    );
-
-    let change_alpha = commands.register_system(
-        |change: In<ValueChange<f32>>, mut color: ResMut<DemoWidgetStates>| {
-            color.rgb_color.alpha = change.value;
-        },
-    );
-
-    let change_hue = commands.register_system(
-        |change: In<ValueChange<f32>>, mut color: ResMut<DemoWidgetStates>| {
-            color.hsl_color.hue = change.value;
-        },
-    );
-
-    let change_saturation = commands.register_system(
-        |change: In<ValueChange<f32>>, mut color: ResMut<DemoWidgetStates>| {
-            color.hsl_color.saturation = change.value;
-        },
-    );
-
-    let change_lightness = commands.register_system(
-        |change: In<ValueChange<f32>>, mut color: ResMut<DemoWidgetStates>| {
-            color.hsl_color.lightness = change.value;
-        },
-    );
-
-    let print_change = commands.register_system(|change: In<ValueChange<f32>>| {
-        info!("Slider value changed to: {}", change.value);
-    });
-
-    /// // Register a one-shot system
-    /// fn my_callback_system() {
-    ///     println!("Callback executed!");
-    /// }
-    ///
-    /// let system_id = app.world_mut().register_system(my_callback_system);
-    ///
-    /// // Wrap system in a callback
-    /// let callback = Callback::System(system_id);
+fn demo_root() -> impl Bundle {
     (
         Node {
             width: percent(20),
@@ -561,7 +444,7 @@ fn demo_root(commands: &mut Commands) -> impl Bundle {
                         slider(
                             SliderProps {
                                 min: 0.0,
-                                value: 0.0,
+                                value: 1.0,
                                 max: 1.0,
                                 ..default()
                             },
@@ -657,71 +540,6 @@ fn demo_root(commands: &mut Commands) -> impl Bundle {
             ]
         ),],
     )
-}
-
-fn update_colors(
-    colors: Res<DemoWidgetStates>,
-    mut sliders: Query<(Entity, &ColorSlider, &mut SliderBaseColor)>,
-    swatches: Query<(&SwatchType, &Children), With<ColorSwatch>>,
-    mut commands: Commands,
-) {
-    if colors.is_changed() {
-        for (slider_ent, slider, mut base) in sliders.iter_mut() {
-            match slider.channel {
-                ColorChannel::Red => {
-                    base.0 = colors.rgb_color.into();
-                    commands
-                        .entity(slider_ent)
-                        .insert(SliderValue(colors.rgb_color.red));
-                }
-                ColorChannel::Green => {
-                    base.0 = colors.rgb_color.into();
-                    commands
-                        .entity(slider_ent)
-                        .insert(SliderValue(colors.rgb_color.green));
-                }
-                ColorChannel::Blue => {
-                    base.0 = colors.rgb_color.into();
-                    commands
-                        .entity(slider_ent)
-                        .insert(SliderValue(colors.rgb_color.blue));
-                }
-                ColorChannel::HslHue => {
-                    base.0 = colors.hsl_color.into();
-                    commands
-                        .entity(slider_ent)
-                        .insert(SliderValue(colors.hsl_color.hue));
-                }
-                ColorChannel::HslSaturation => {
-                    base.0 = colors.hsl_color.into();
-                    commands
-                        .entity(slider_ent)
-                        .insert(SliderValue(colors.hsl_color.saturation));
-                }
-                ColorChannel::HslLightness => {
-                    base.0 = colors.hsl_color.into();
-                    commands
-                        .entity(slider_ent)
-                        .insert(SliderValue(colors.hsl_color.lightness));
-                }
-                ColorChannel::Alpha => {
-                    base.0 = colors.rgb_color.into();
-                    commands
-                        .entity(slider_ent)
-                        .insert(SliderValue(colors.rgb_color.alpha));
-                }
-            }
-        }
-
-        for (swatch_type, children) in swatches.iter() {
-            commands
-                .entity(children[0])
-                .insert(BackgroundColor(match swatch_type {
-                    SwatchType::Rgb => colors.rgb_color.into(),
-                    SwatchType::Hsl => colors.hsl_color.into(),
-                }));
-        }
-    }
 }
 
 fn update_rows_cols_from_sliders(
