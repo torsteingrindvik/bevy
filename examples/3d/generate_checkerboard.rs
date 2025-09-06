@@ -67,6 +67,12 @@ struct SliderClearcoat;
 #[derive(Component)]
 struct SliderClearcoatRoughness;
 
+#[derive(Component)]
+struct SliderSkyboxBrightness;
+
+#[derive(Component)]
+struct SliderEnvironmentIntensity;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -89,6 +95,7 @@ fn main() {
         .add_systems(Update, update_slider_height)
         .add_systems(Update, update_slider_font_size)
         .add_systems(Update, update_checkerboard_material_from_sliders)
+        .add_systems(Update, update_environment_from_sliders)
         .run();
 }
 
@@ -312,7 +319,7 @@ fn create_checkerboard(settings: CheckerboardSettings) -> Mesh {
 fn demo_root() -> impl Bundle {
     (
         Node {
-            width: percent(20),
+            width: percent(30),
             height: percent(100),
             align_items: AlignItems::Start,
             justify_content: JustifyContent::Start,
@@ -466,6 +473,69 @@ fn demo_root() -> impl Bundle {
                                 SliderPrecision(2),
                                 SliderClearcoatRoughness
                             ),
+                        ),
+                    ],
+                ),
+                // Environtment settings node
+                (
+                    Node {
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::SpaceBetween,
+                        row_gap: px(4.),
+                        ..default()
+                    },
+                    children![
+                        (
+                            Text("Environment".to_owned()),
+                            TextLayout::new_with_justify(Justify::Center),
+                            TextFont::from_font_size(UI_TEXT_BIG)
+                        ),
+                        (
+                            Node {
+                                display: Display::Flex,
+                                flex_direction: FlexDirection::Row,
+                                justify_content: JustifyContent::SpaceBetween,
+                                align_items: AlignItems::Center,
+                                column_gap: px(4.),
+                                ..default()
+                            },
+                            children![
+                                (
+                                    Text("Skybox Brightness".to_owned()),
+                                    TextFont::from_font_size(UI_TEXT_SMALL)
+                                ),
+                                slider(
+                                    SliderProps {
+                                        min: 0.0,
+                                        value: 5000.0,
+                                        max: 10000.0,
+                                        ..default()
+                                    },
+                                    (
+                                        SliderStep(1000.),
+                                        SliderPrecision(3),
+                                        SliderSkyboxBrightness
+                                    ),
+                                ),
+                                (
+                                    Text("Environment Intensity".to_owned()),
+                                    TextFont::from_font_size(UI_TEXT_SMALL)
+                                ),
+                                slider(
+                                    SliderProps {
+                                        min: 0.0,
+                                        value: 2000.0,
+                                        max: 10000.0,
+                                        ..default()
+                                    },
+                                    (
+                                        SliderStep(100.),
+                                        SliderPrecision(3),
+                                        SliderEnvironmentIntensity
+                                    ),
+                                ),
+                            ]
                         ),
                     ],
                 ),
@@ -640,4 +710,19 @@ fn update_checkerboard_material_from_sliders(
     material.perceptual_roughness = roughness.0;
     material.clearcoat = clearcoat.0;
     material.clearcoat_perceptual_roughness = clearcoat_roughness.0;
+}
+
+fn update_environment_from_sliders(
+    slider_skybox_brightness: Single<&SliderValue, With<SliderSkyboxBrightness>>,
+    slider_environment_intensity: Single<&SliderValue, With<SliderEnvironmentIntensity>>,
+    mut q_skybox: Query<&mut Skybox>,
+    mut q_envmap: Query<&mut EnvironmentMapLight>,
+) {
+    for mut skybox in &mut q_skybox {
+        skybox.brightness = slider_skybox_brightness.0;
+    }
+
+    for mut envmap in &mut q_envmap {
+        envmap.intensity = slider_environment_intensity.0;
+    }
 }
