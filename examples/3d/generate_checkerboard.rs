@@ -1,6 +1,17 @@
-//! This example demonstrates how to create a custom mesh,
-//! assign a custom UV mapping for a custom texture,
-//! and how to change the UV mapping at run-time.
+//! Example that generates a checkerboard mesh procedurally
+
+// TODO:
+// - UVs are not working with clearcoat normal map, investigate
+//   - Is there a way to debug view it?
+// - Render scene to offscreen texture and display that in the UI
+// - Camera: Add controls for projection
+// - Post-processing:
+//   - Noise
+// - Expose corner positions in world space
+//   - Optionally visualize them with gizmos
+// - Try using world-space corner positions, display in viewport via gizmos
+// - Checkerboard color options
+// - Checkerboard controls
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::core_widgets::{Activate, Callback};
