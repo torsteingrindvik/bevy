@@ -2,12 +2,15 @@
 //! assign a custom UV mapping for a custom texture,
 //! and how to change the UV mapping at run-time.
 
+use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::post_process::bloom::Bloom;
+use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, core_widgets::CoreSlider,
     mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
 };
 use bevy::{
-    core_widgets::{CoreWidgetsPlugins, SliderPrecision, SliderStep, SliderValue},
+    core_widgets::{CoreWidgetsPlugins, SliderPrecision, SliderValue},
     feathers::{
         controls::{slider, SliderProps},
         dark_theme::create_dark_theme,
@@ -73,6 +76,15 @@ struct SliderSkyboxBrightness;
 #[derive(Component)]
 struct SliderEnvironmentIntensity;
 
+#[derive(Component)]
+struct SliderFocalDistance;
+
+#[derive(Component)]
+struct SliderSensorHeight;
+
+#[derive(Component)]
+struct SliderFStops;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -96,6 +108,7 @@ fn main() {
         .add_systems(Update, update_slider_font_size)
         .add_systems(Update, update_checkerboard_material_from_sliders)
         .add_systems(Update, update_environment_from_sliders)
+        .add_systems(Update, update_depth_of_field_from_sliders)
         .run();
 }
 
@@ -126,22 +139,6 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    // Import the custom texture.
-    // let custom_texture_handle: Handle<Image> = asset_server.load("textures/array_texture.png");
-
-    // Create and save a handle to the mesh.
-    // let cube_mesh_handle: Handle<Mesh> = meshes.add(create_cube_mesh());
-
-    // Render the mesh with the custom texture, and add the marker.
-    // commands.spawn((
-    //     Mesh3d(cube_mesh_handle),
-    //     MeshMaterial3d(materials.add(StandardMaterial {
-    //         // base_color_texture: Some(custom_texture_handle),
-    //         ..default()
-    //     })),
-    //     CustomUV,
-    // ));
-
     let checkerboard = CheckerboardSettings {
         rows: 4,
         cols: 3,
@@ -184,6 +181,13 @@ fn setup(
                 ..default()
             },
             camera_and_light_transform,
+            Tonemapping::TonyMcMapface,
+            Bloom::NATURAL,
+            DepthOfField {
+                mode: DepthOfFieldMode::Bokeh,
+                focal_distance: 1.0,
+                ..default()
+            },
         ))
         .insert(Skybox {
             brightness: 5000.0,
@@ -338,7 +342,7 @@ fn demo_root() -> impl Bundle {
                 justify_content: JustifyContent::Start,
                 padding: UiRect::all(px(8)),
                 row_gap: px(16),
-                width: percent(35),
+                width: percent(100),
                 min_width: px(200),
                 ..default()
             },
@@ -369,7 +373,7 @@ fn demo_root() -> impl Bundle {
                                 max: 20.0,
                                 ..default()
                             },
-                            (SliderStep(1.), SliderPrecision(0), SliderCheckerboardRows),
+                            (SliderPrecision(0), SliderCheckerboardRows),
                         ),
                         (
                             Text("Cols".to_owned()),
@@ -382,7 +386,7 @@ fn demo_root() -> impl Bundle {
                                 max: 20.0,
                                 ..default()
                             },
-                            (SliderStep(1.), SliderPrecision(0), SliderCheckerboardCols),
+                            (SliderPrecision(0), SliderCheckerboardCols),
                         ),
                         (
                             Text("Square Size (mm)".to_owned()),
@@ -395,11 +399,7 @@ fn demo_root() -> impl Bundle {
                                 max: 100.0,
                                 ..default()
                             },
-                            (
-                                SliderStep(1.),
-                                SliderPrecision(0),
-                                SliderCheckerboardSquareSizeMillimeters
-                            ),
+                            (SliderPrecision(0), SliderCheckerboardSquareSizeMillimeters),
                         ),
                     ],
                 ),
@@ -429,7 +429,7 @@ fn demo_root() -> impl Bundle {
                                 max: 1.0,
                                 ..default()
                             },
-                            (SliderStep(0.01), SliderPrecision(2), SliderMetallic),
+                            (SliderPrecision(2), SliderMetallic),
                         ),
                         (
                             Text("Roughness".to_owned()),
@@ -442,7 +442,7 @@ fn demo_root() -> impl Bundle {
                                 max: 1.0,
                                 ..default()
                             },
-                            (SliderStep(0.01), SliderPrecision(2), SliderRoughness),
+                            (SliderPrecision(2), SliderRoughness),
                         ),
                         (
                             Text("Clearcoat".to_owned()),
@@ -455,7 +455,7 @@ fn demo_root() -> impl Bundle {
                                 max: 1.0,
                                 ..default()
                             },
-                            (SliderStep(0.01), SliderPrecision(2), SliderClearcoat),
+                            (SliderPrecision(2), SliderClearcoat),
                         ),
                         (
                             Text("Clearcoat Roughness".to_owned()),
@@ -468,11 +468,7 @@ fn demo_root() -> impl Bundle {
                                 max: 1.0,
                                 ..default()
                             },
-                            (
-                                SliderStep(0.01),
-                                SliderPrecision(2),
-                                SliderClearcoatRoughness
-                            ),
+                            (SliderPrecision(2), SliderClearcoatRoughness),
                         ),
                     ],
                 ),
@@ -492,50 +488,30 @@ fn demo_root() -> impl Bundle {
                             TextFont::from_font_size(UI_TEXT_BIG)
                         ),
                         (
-                            Node {
-                                display: Display::Flex,
-                                flex_direction: FlexDirection::Row,
-                                justify_content: JustifyContent::SpaceBetween,
-                                align_items: AlignItems::Center,
-                                column_gap: px(4.),
+                            Text("Skybox Brightness".to_owned()),
+                            TextFont::from_font_size(UI_TEXT_SMALL)
+                        ),
+                        slider(
+                            SliderProps {
+                                min: 0.0,
+                                value: 5000.0,
+                                max: 10000.0,
                                 ..default()
                             },
-                            children![
-                                (
-                                    Text("Skybox Brightness".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 0.0,
-                                        value: 5000.0,
-                                        max: 10000.0,
-                                        ..default()
-                                    },
-                                    (
-                                        SliderStep(1000.),
-                                        SliderPrecision(3),
-                                        SliderSkyboxBrightness
-                                    ),
-                                ),
-                                (
-                                    Text("Environment Intensity".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 0.0,
-                                        value: 2000.0,
-                                        max: 10000.0,
-                                        ..default()
-                                    },
-                                    (
-                                        SliderStep(100.),
-                                        SliderPrecision(3),
-                                        SliderEnvironmentIntensity
-                                    ),
-                                ),
-                            ]
+                            (SliderPrecision(-3), SliderSkyboxBrightness),
+                        ),
+                        (
+                            Text("Environment Intensity".to_owned()),
+                            TextFont::from_font_size(UI_TEXT_SMALL)
+                        ),
+                        slider(
+                            SliderProps {
+                                min: 0.0,
+                                value: 2000.0,
+                                max: 10000.0,
+                                ..default()
+                            },
+                            (SliderPrecision(-2), SliderEnvironmentIntensity),
                         ),
                     ],
                 ),
@@ -575,7 +551,7 @@ fn demo_root() -> impl Bundle {
                                         max: 3.0,
                                         ..default()
                                     },
-                                    (SliderStep(1.), SliderPrecision(2), SliderCameraX),
+                                    (SliderPrecision(2), SliderCameraX),
                                 ),
                                 (
                                     Text("Y".to_owned()),
@@ -588,7 +564,7 @@ fn demo_root() -> impl Bundle {
                                         max: 3.0,
                                         ..default()
                                     },
-                                    (SliderStep(1.), SliderPrecision(2), SliderCameraY),
+                                    (SliderPrecision(2), SliderCameraY),
                                 ),
                                 (
                                     Text("Z".to_owned()),
@@ -601,9 +577,68 @@ fn demo_root() -> impl Bundle {
                                         max: 3.0,
                                         ..default()
                                     },
-                                    (SliderStep(1.), SliderPrecision(2), SliderCameraZ),
+                                    (SliderPrecision(2), SliderCameraZ),
                                 ),
                             ]
+                        ),
+                    ],
+                ),
+                // DoF
+                (
+                    Node {
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::SpaceBetween,
+                        row_gap: px(4.),
+                        ..default()
+                    },
+                    children![
+                        (
+                            Text("Depth of Field".to_owned()),
+                            TextLayout::new_with_justify(Justify::Center),
+                            TextFont::from_font_size(UI_TEXT_BIG)
+                        ),
+                        // Focal distance node
+                        (
+                            Text("Focal Distance".to_owned()),
+                            TextFont::from_font_size(UI_TEXT_SMALL)
+                        ),
+                        slider(
+                            SliderProps {
+                                min: 0.3,
+                                value: 1.0,
+                                max: 10.0,
+                                ..default()
+                            },
+                            (SliderPrecision(2), SliderFocalDistance),
+                        ),
+                        // Sensor height node
+                        (
+                            Text("Sensor Height (mm)".to_owned()),
+                            TextFont::from_font_size(UI_TEXT_SMALL)
+                        ),
+                        slider(
+                            SliderProps {
+                                min: 5.0,
+                                value: 18.66,
+                                max: 50.0,
+                                ..default()
+                            },
+                            (SliderPrecision(2), SliderSensorHeight),
+                        ),
+                        // F-stops node
+                        (
+                            Text("F-stops".to_owned()),
+                            TextFont::from_font_size(UI_TEXT_SMALL)
+                        ),
+                        slider(
+                            SliderProps {
+                                min: 0.1,
+                                value: 1.0,
+                                max: 3.0,
+                                ..default()
+                            },
+                            (SliderPrecision(1), SliderFStops),
                         ),
                     ],
                 ),
@@ -724,5 +759,18 @@ fn update_environment_from_sliders(
 
     for mut envmap in &mut q_envmap {
         envmap.intensity = slider_environment_intensity.0;
+    }
+}
+
+fn update_depth_of_field_from_sliders(
+    slider_focal_distance: Single<&SliderValue, With<SliderFocalDistance>>,
+    slider_sensor_height: Single<&SliderValue, With<SliderSensorHeight>>,
+    slider_f_stops: Single<&SliderValue, With<SliderFStops>>,
+    mut q_dof: Query<&mut DepthOfField>,
+) {
+    for mut dof in &mut q_dof {
+        dof.focal_distance = slider_focal_distance.0;
+        dof.sensor_height = slider_sensor_height.0 * 1e-3; // mm to meters
+        dof.aperture_f_stops = slider_f_stops.0;
     }
 }
