@@ -43,6 +43,8 @@ use bevy_render::view::Hdr;
 const UI_TEXT_SMALL: f32 = 12.0;
 const UI_TEXT_BIG: f32 = 16.0;
 
+const UI_ROW_GAP_PER_TAB: f32 = 8.0;
+
 // Define a "marker" component to mark the custom mesh. Marker components are often used in Bevy for
 // filtering entities in queries with `With`, they're usually not queried directly since they don't
 // contain information within them.
@@ -100,6 +102,15 @@ struct SliderSensorHeight;
 #[derive(Component)]
 struct SliderFStops;
 
+#[derive(Component)]
+struct SliderCameraProjectionFov;
+
+#[derive(Component)]
+struct SliderCameraAspectRatioNumerator;
+
+#[derive(Component)]
+struct SliderCameraAspectRatioDenominator;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
@@ -130,6 +141,7 @@ fn main() {
         .add_systems(Update, update_square_size_from_slider)
         .add_systems(Update, update_checkerboard_transform_from_settings)
         .add_systems(Update, update_camera_transform_from_sliders)
+        .add_systems(Update, update_camera_projection_from_sliders)
         .add_systems(Update, update_slider_height)
         .add_systems(Update, update_slider_font_size)
         .add_systems(Update, update_checkerboard_material_from_sliders)
@@ -231,7 +243,7 @@ fn setup(
     // Light up the scene.
     commands.spawn((PointLight::default(), camera_and_light_transform));
 
-    let root = demo_root(&mut commands);
+    let root = root_node(&mut commands);
     commands.spawn(root);
 
     commands.spawn(Sprite::from_image(asset_server.load("branding/icon.png")));
@@ -359,9 +371,428 @@ fn button_selector(clicked: In<Activate>, mut buttons: Query<(Entity, &mut Butto
     }
 }
 
-fn demo_root(commands: &mut Commands) -> impl Bundle {
+fn tabs_node(commands: &mut Commands) -> impl Bundle {
     let tabs_callback = commands.register_system(button_selector);
 
+    // Tabs
+    (
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Start,
+            column_gap: px(8),
+            ..default()
+        },
+        children![
+            button(
+                ButtonProps {
+                    on_click: Callback::System(tabs_callback),
+                    variant: ButtonVariant::Primary,
+                    ..default()
+                },
+                UiTabVariant::Geometry,
+                Spawn((Text::new("Geometry"), ThemedText))
+            ),
+            button(
+                ButtonProps {
+                    on_click: Callback::System(tabs_callback),
+                    ..default()
+                },
+                UiTabVariant::Material,
+                Spawn((Text::new("Material"), ThemedText))
+            ),
+            button(
+                ButtonProps {
+                    on_click: Callback::System(tabs_callback),
+                    ..default()
+                },
+                UiTabVariant::Environment,
+                Spawn((Text::new("Environment"), ThemedText))
+            ),
+            button(
+                ButtonProps {
+                    on_click: Callback::System(tabs_callback),
+                    ..default()
+                },
+                UiTabVariant::Camera,
+                Spawn((Text::new("Camera"), ThemedText))
+            ),
+        ],
+    )
+}
+
+fn geometry_node() -> impl Bundle {
+    // Checkerboard settings node
+    (
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
+            row_gap: px(UI_ROW_GAP_PER_TAB),
+            ..default()
+        },
+        UiTabVariant::Geometry,
+        UiTabNode,
+        children![
+            (
+                Text("Geometry".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Text("Rows".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 2.0,
+                    value: 9.0,
+                    max: 20.0,
+                    ..default()
+                },
+                (SliderPrecision(0), SliderCheckerboardRows),
+            ),
+            (
+                Text("Cols".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 2.0,
+                    value: 16.0,
+                    max: 20.0,
+                    ..default()
+                },
+                (SliderPrecision(0), SliderCheckerboardCols),
+            ),
+            (
+                Text("Square Size (mm)".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 5.0,
+                    value: 34.0,
+                    max: 100.0,
+                    ..default()
+                },
+                (SliderPrecision(0), SliderCheckerboardSquareSizeMillimeters),
+            ),
+        ],
+    )
+}
+
+fn material_node() -> impl Bundle {
+    (
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
+            row_gap: px(UI_ROW_GAP_PER_TAB),
+            ..default()
+        },
+        UiTabVariant::Material,
+        UiTabNode,
+        children![
+            (
+                Text("Material".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Text("Metallic".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.0,
+                    value: 0.9,
+                    max: 1.0,
+                    ..default()
+                },
+                (SliderPrecision(2), SliderMetallic),
+            ),
+            (
+                Text("Roughness".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.0,
+                    value: 0.1,
+                    max: 1.0,
+                    ..default()
+                },
+                (SliderPrecision(2), SliderRoughness),
+            ),
+            (
+                Text("Clearcoat".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.0,
+                    value: 1.0,
+                    max: 1.0,
+                    ..default()
+                },
+                (SliderPrecision(2), SliderClearcoat),
+            ),
+            (
+                Text("Clearcoat Roughness".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.0,
+                    value: 0.5,
+                    max: 1.0,
+                    ..default()
+                },
+                (SliderPrecision(2), SliderClearcoatRoughness),
+            ),
+        ],
+    )
+}
+
+fn environment_node() -> impl Bundle {
+    (
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
+            row_gap: px(UI_ROW_GAP_PER_TAB),
+            ..default()
+        },
+        UiTabVariant::Environment,
+        UiTabNode,
+        children![
+            (
+                Text("Environment".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Text("Skybox Brightness".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.0,
+                    value: 5000.0,
+                    max: 10000.0,
+                    ..default()
+                },
+                (SliderPrecision(-3), SliderSkyboxBrightness),
+            ),
+            (
+                Text("Environment Intensity".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.0,
+                    value: 2000.0,
+                    max: 10000.0,
+                    ..default()
+                },
+                (SliderPrecision(-2), SliderEnvironmentIntensity),
+            ),
+        ],
+    )
+}
+
+fn camera_node() -> impl Bundle {
+    (
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
+            row_gap: px(UI_ROW_GAP_PER_TAB),
+            ..default()
+        },
+        UiTabVariant::Camera,
+        UiTabNode,
+        children![
+            (
+                Text("Position".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("X".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.5,
+                            max: 3.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCameraX),
+                    ),
+                    (
+                        Text("Y".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.1,
+                            value: 0.5,
+                            max: 3.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCameraY),
+                    ),
+                    (
+                        Text("Z".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.5,
+                            max: 3.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCameraZ),
+                    ),
+                ]
+            ),
+            // Projection
+            (
+                Text("Projection".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Text("Field of View (degrees)".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 10.0,
+                    value: 45.0,
+                    max: 135.0,
+                    ..default()
+                },
+                (SliderPrecision(1), SliderCameraProjectionFov),
+            ),
+            // Aspect ratio
+            (
+                Text("Aspect Ratio".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    row_gap: px(UI_ROW_GAP_PER_TAB),
+                    ..default()
+                },
+                children![
+                    slider(
+                        SliderProps {
+                            min: 1.0,
+                            value: 16.0,
+                            max: 30.0,
+                            ..default()
+                        },
+                        (SliderPrecision(0), SliderCameraAspectRatioNumerator),
+                    ),
+                    (
+                        Text(":".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 1.0,
+                            value: 9.0,
+                            max: 30.0,
+                            ..default()
+                        },
+                        (SliderPrecision(0), SliderCameraAspectRatioDenominator),
+                    ),
+                ],
+            ),
+            // DoF
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::SpaceBetween,
+                    row_gap: px(UI_ROW_GAP_PER_TAB),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("Depth of Field".to_owned()),
+                        TextLayout::new_with_justify(Justify::Center),
+                        TextFont::from_font_size(UI_TEXT_BIG)
+                    ),
+                    // Focal distance node
+                    (
+                        Text("Focal Distance".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.3,
+                            value: 1.0,
+                            max: 10.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderFocalDistance),
+                    ),
+                    // Sensor height node
+                    (
+                        Text("Sensor Height (mm)".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 5.0,
+                            value: 18.66,
+                            max: 50.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderSensorHeight),
+                    ),
+                    // F-stops node
+                    (
+                        Text("F-stops".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.1,
+                            value: 1.0,
+                            max: 3.0,
+                            ..default()
+                        },
+                        (SliderPrecision(1), SliderFStops),
+                    ),
+                ],
+            ),
+        ],
+    )
+}
+
+fn root_node(commands: &mut Commands) -> impl Bundle {
     (
         Node {
             width: percent(30),
@@ -388,357 +819,13 @@ fn demo_root(commands: &mut Commands) -> impl Bundle {
                 ..default()
             },
             children![
-                // Tabs
-                (
-                    Node {
-                        display: Display::Flex,
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Start,
-                        column_gap: px(8),
-                        ..default()
-                    },
-                    children![
-                        button(
-                            ButtonProps {
-                                on_click: Callback::System(tabs_callback),
-                                variant: ButtonVariant::Primary,
-                                ..default()
-                            },
-                            UiTabVariant::Geometry,
-                            Spawn((Text::new("Geometry"), ThemedText))
-                        ),
-                        button(
-                            ButtonProps {
-                                on_click: Callback::System(tabs_callback),
-                                ..default()
-                            },
-                            UiTabVariant::Material,
-                            Spawn((Text::new("Material"), ThemedText))
-                        ),
-                        button(
-                            ButtonProps {
-                                on_click: Callback::System(tabs_callback),
-                                ..default()
-                            },
-                            UiTabVariant::Environment,
-                            Spawn((Text::new("Environment"), ThemedText))
-                        ),
-                        button(
-                            ButtonProps {
-                                on_click: Callback::System(tabs_callback),
-                                ..default()
-                            },
-                            UiTabVariant::Camera,
-                            Spawn((Text::new("Camera"), ThemedText))
-                        ),
-                    ]
-                ),
-                // Checkerboard settings node
-                (
-                    Node {
-                        display: Display::Flex,
-                        flex_direction: FlexDirection::Column,
-                        justify_content: JustifyContent::SpaceBetween,
-                        row_gap: px(4.),
-                        ..default()
-                    },
-                    UiTabVariant::Geometry,
-                    UiTabNode,
-                    children![
-                        (
-                            Text("Geometry".to_owned()),
-                            TextLayout::new_with_justify(Justify::Center),
-                            TextFont::from_font_size(UI_TEXT_BIG)
-                        ),
-                        (
-                            Text("Rows".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 2.0,
-                                value: 9.0,
-                                max: 20.0,
-                                ..default()
-                            },
-                            (SliderPrecision(0), SliderCheckerboardRows),
-                        ),
-                        (
-                            Text("Cols".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 2.0,
-                                value: 16.0,
-                                max: 20.0,
-                                ..default()
-                            },
-                            (SliderPrecision(0), SliderCheckerboardCols),
-                        ),
-                        (
-                            Text("Square Size (mm)".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 5.0,
-                                value: 34.0,
-                                max: 100.0,
-                                ..default()
-                            },
-                            (SliderPrecision(0), SliderCheckerboardSquareSizeMillimeters),
-                        ),
-                    ],
-                ),
-                // Checkerboard material
-                (
-                    Node {
-                        display: Display::Flex,
-                        flex_direction: FlexDirection::Column,
-                        justify_content: JustifyContent::SpaceBetween,
-                        row_gap: px(4.),
-                        ..default()
-                    },
-                    UiTabVariant::Material,
-                    UiTabNode,
-                    children![
-                        (
-                            Text("Material".to_owned()),
-                            TextLayout::new_with_justify(Justify::Center),
-                            TextFont::from_font_size(UI_TEXT_BIG)
-                        ),
-                        (
-                            Text("Metallic".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.0,
-                                value: 0.9,
-                                max: 1.0,
-                                ..default()
-                            },
-                            (SliderPrecision(2), SliderMetallic),
-                        ),
-                        (
-                            Text("Roughness".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.0,
-                                value: 0.1,
-                                max: 1.0,
-                                ..default()
-                            },
-                            (SliderPrecision(2), SliderRoughness),
-                        ),
-                        (
-                            Text("Clearcoat".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.0,
-                                value: 1.0,
-                                max: 1.0,
-                                ..default()
-                            },
-                            (SliderPrecision(2), SliderClearcoat),
-                        ),
-                        (
-                            Text("Clearcoat Roughness".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.0,
-                                value: 0.5,
-                                max: 1.0,
-                                ..default()
-                            },
-                            (SliderPrecision(2), SliderClearcoatRoughness),
-                        ),
-                    ],
-                ),
-                // Environtment settings node
-                (
-                    Node {
-                        display: Display::Flex,
-                        flex_direction: FlexDirection::Column,
-                        justify_content: JustifyContent::SpaceBetween,
-                        row_gap: px(4.),
-                        ..default()
-                    },
-                    UiTabVariant::Environment,
-                    UiTabNode,
-                    children![
-                        (
-                            Text("Environment".to_owned()),
-                            TextLayout::new_with_justify(Justify::Center),
-                            TextFont::from_font_size(UI_TEXT_BIG)
-                        ),
-                        (
-                            Text("Skybox Brightness".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.0,
-                                value: 5000.0,
-                                max: 10000.0,
-                                ..default()
-                            },
-                            (SliderPrecision(-3), SliderSkyboxBrightness),
-                        ),
-                        (
-                            Text("Environment Intensity".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.0,
-                                value: 2000.0,
-                                max: 10000.0,
-                                ..default()
-                            },
-                            (SliderPrecision(-2), SliderEnvironmentIntensity),
-                        ),
-                    ],
-                ),
-                // Camera settings node
-                (
-                    Node {
-                        display: Display::Flex,
-                        flex_direction: FlexDirection::Column,
-                        justify_content: JustifyContent::SpaceBetween,
-                        row_gap: px(4.),
-                        ..default()
-                    },
-                    UiTabVariant::Camera,
-                    UiTabNode,
-                    children![
-                        (
-                            Text("Camera Settings".to_owned()),
-                            TextLayout::new_with_justify(Justify::Center),
-                            TextFont::from_font_size(UI_TEXT_BIG)
-                        ),
-                        (
-                            Node {
-                                display: Display::Flex,
-                                flex_direction: FlexDirection::Row,
-                                justify_content: JustifyContent::SpaceBetween,
-                                align_items: AlignItems::Center,
-                                column_gap: px(4.),
-                                ..default()
-                            },
-                            children![
-                                (
-                                    Text("X".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 0.0,
-                                        value: 0.5,
-                                        max: 3.0,
-                                        ..default()
-                                    },
-                                    (SliderPrecision(2), SliderCameraX),
-                                ),
-                                (
-                                    Text("Y".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 0.1,
-                                        value: 0.5,
-                                        max: 3.0,
-                                        ..default()
-                                    },
-                                    (SliderPrecision(2), SliderCameraY),
-                                ),
-                                (
-                                    Text("Z".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 0.0,
-                                        value: 0.5,
-                                        max: 3.0,
-                                        ..default()
-                                    },
-                                    (SliderPrecision(2), SliderCameraZ),
-                                ),
-                            ]
-                        ),
-                        // DoF
-                        (
-                            Node {
-                                display: Display::Flex,
-                                flex_direction: FlexDirection::Column,
-                                justify_content: JustifyContent::SpaceBetween,
-                                row_gap: px(4.),
-                                ..default()
-                            },
-                            children![
-                                (
-                                    Text("Depth of Field".to_owned()),
-                                    TextLayout::new_with_justify(Justify::Center),
-                                    TextFont::from_font_size(UI_TEXT_BIG)
-                                ),
-                                // Focal distance node
-                                (
-                                    Text("Focal Distance".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 0.3,
-                                        value: 1.0,
-                                        max: 10.0,
-                                        ..default()
-                                    },
-                                    (SliderPrecision(2), SliderFocalDistance),
-                                ),
-                                // Sensor height node
-                                (
-                                    Text("Sensor Height (mm)".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 5.0,
-                                        value: 18.66,
-                                        max: 50.0,
-                                        ..default()
-                                    },
-                                    (SliderPrecision(2), SliderSensorHeight),
-                                ),
-                                // F-stops node
-                                (
-                                    Text("F-stops".to_owned()),
-                                    TextFont::from_font_size(UI_TEXT_SMALL)
-                                ),
-                                slider(
-                                    SliderProps {
-                                        min: 0.1,
-                                        value: 1.0,
-                                        max: 3.0,
-                                        ..default()
-                                    },
-                                    (SliderPrecision(1), SliderFStops),
-                                ),
-                            ],
-                        ),
-                    ],
-                ),
+                tabs_node(commands),
+                geometry_node(),
+                material_node(),
+                environment_node(),
+                camera_node()
             ]
-        ),],
+        )],
     )
 }
 
@@ -802,6 +889,23 @@ fn update_camera_transform_from_sliders(
 ) {
     camera_transform.translation = Vec3::new(slider_x.0, slider_y.0, slider_z.0);
     camera_transform.look_at(Vec3::ZERO, Vec3::Y);
+}
+
+fn update_camera_projection_from_sliders(
+    slider_fov: Single<&SliderValue, With<SliderCameraProjectionFov>>,
+    slider_aspect_ratio_numerator: Single<&SliderValue, With<SliderCameraAspectRatioNumerator>>,
+    slider_aspect_ratio_denominator: Single<&SliderValue, With<SliderCameraAspectRatioDenominator>>,
+    mut camera_transform: Single<&mut Projection, With<Camera3d>>,
+) {
+    let perspective = match camera_transform.as_mut() {
+        Projection::Perspective(p) => p,
+        _ => {
+            unimplemented!();
+        }
+    };
+
+    perspective.fov = slider_fov.0.to_radians();
+    perspective.aspect_ratio = slider_aspect_ratio_numerator.0 / slider_aspect_ratio_denominator.0;
 }
 
 fn update_slider_height(mut sliders: Query<&mut Node, With<CoreSlider>>) {
