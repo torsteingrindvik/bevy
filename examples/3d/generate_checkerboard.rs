@@ -3,8 +3,6 @@
 // TODO:
 // - UVs are not working with clearcoat normal map, investigate
 //   - Is there a way to debug view it?
-// - Render scene to offscreen texture and display that in the UI
-// - Camera: Add controls for projection
 // - Post-processing:
 //   - Noise
 // - Expose corner positions in world space
@@ -37,7 +35,8 @@ use bevy::{
         InputDispatchPlugin,
     },
 };
-use bevy_image::ImageLoaderSettings;
+use bevy_image::{ImageLoaderSettings, ImageSampler};
+use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
 
 const UI_TEXT_SMALL: f32 = 12.0;
@@ -172,11 +171,30 @@ struct CheckerboardSettings {
     square_size: f32,
 }
 
+fn image_render_target(images: &mut Assets<Image>) -> Handle<Image> {
+    // let mut image = Image::new_uninit(
+    //     bevy_render::render_resource::Extent3d {
+    //         width: 1920,
+    //         height: 1080,
+    //         depth_or_array_layers: 1,
+    //     },
+    //     bevy_render::render_resource::TextureDimension::D2,
+    //     bevy_render::render_resource::TextureFormat::bevy_default(),
+    //     RenderAssetUsages::default(),
+    // );
+
+    let mut image = Image::new_target_texture(1920, 1080, TextureFormat::bevy_default());
+    image.sampler = ImageSampler::nearest();
+
+    images.add(image)
+}
+
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let checkerboard = CheckerboardSettings {
         rows: 4,
@@ -210,6 +228,9 @@ fn setup(
     let camera_and_light_transform =
         Transform::from_xyz(3.8, 3.8, 1.8).looking_at(Vec3::ZERO, Vec3::Y);
 
+    // let scene_image = image_render_target(&asset_server);
+    let scene_image = image_render_target(&mut images);
+
     // Camera in 3D space.
     commands
         .spawn((
@@ -217,6 +238,7 @@ fn setup(
             Hdr,
             Camera {
                 clear_color: ClearColorConfig::Custom(palettes::tailwind::PINK_600.into()),
+                target: bevy::camera::RenderTarget::Image(scene_image.clone().into()),
                 ..default()
             },
             camera_and_light_transform,
@@ -240,13 +262,24 @@ fn setup(
             ..default()
         });
 
+    let ui_camera = commands
+        .spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                ..Default::default()
+            },
+            IsDefaultUiCamera,
+        ))
+        .id();
+
     // Light up the scene.
     commands.spawn((PointLight::default(), camera_and_light_transform));
 
-    let root = root_node(&mut commands);
+    let root = root_node(&mut commands, ui_camera, &scene_image);
     commands.spawn(root);
 
-    commands.spawn(Sprite::from_image(asset_server.load("branding/icon.png")));
+    // commands.spawn(Sprite::from_image(asset_server.load("branding/icon.png")));
 }
 
 // System to receive input from the user,
@@ -792,40 +825,53 @@ fn camera_node() -> impl Bundle {
     )
 }
 
-fn root_node(commands: &mut Commands) -> impl Bundle {
+fn root_node(
+    commands: &mut Commands,
+    camera_entity: Entity,
+    scene_image: &Handle<Image>,
+) -> impl Bundle {
     (
         Node {
-            width: percent(30),
+            width: percent(100),
             height: percent(100),
             align_items: AlignItems::Start,
             justify_content: JustifyContent::Start,
             display: Display::Flex,
-            flex_direction: FlexDirection::Column,
-            row_gap: px(10),
+            flex_direction: FlexDirection::Row,
             ..default()
         },
+        UiTargetCamera(camera_entity),
         TabGroup::default(),
         ThemeBackgroundColor(tokens::WINDOW_BG),
-        children![(
-            Node {
-                display: Display::Flex,
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Stretch,
-                justify_content: JustifyContent::Start,
-                padding: UiRect::all(px(8)),
-                row_gap: px(16),
-                width: percent(100),
-                min_width: px(200),
-                ..default()
-            },
-            children![
-                tabs_node(commands),
-                geometry_node(),
-                material_node(),
-                environment_node(),
-                camera_node()
-            ]
-        )],
+        children![
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    justify_content: JustifyContent::Start,
+                    padding: UiRect::all(px(8)),
+                    row_gap: px(16),
+                    width: percent(30),
+                    min_width: px(400),
+                    ..default()
+                },
+                children![
+                    tabs_node(commands),
+                    geometry_node(),
+                    material_node(),
+                    environment_node(),
+                    camera_node()
+                ]
+            ),
+            (
+                ImageNode::new(scene_image.clone()),
+                Node {
+                    width: percent(70),
+                    ..default()
+                },
+            )
+        ],
     )
 }
 
