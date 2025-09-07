@@ -391,6 +391,7 @@ fn demo_root(commands: &mut Commands) -> impl Bundle {
                         button(
                             ButtonProps {
                                 on_click: Callback::System(tabs_callback),
+                                variant: ButtonVariant::Primary,
                                 ..default()
                             },
                             UiTabVariant::Geometry,
@@ -860,7 +861,7 @@ fn update_depth_of_field_from_sliders(
 
 fn update_node_visibility_from_ui_tab_variant(
     buttons: Query<(&ButtonVariant, &UiTabVariant)>,
-    mut query: Query<(&UiTabVariant, &mut Visibility), With<UiTabNode>>,
+    mut query: Query<(&UiTabVariant, &mut Node), With<UiTabNode>>,
 ) {
     let tab_variant_to_visibility = buttons
         .iter()
@@ -868,17 +869,17 @@ fn update_node_visibility_from_ui_tab_variant(
             (
                 *tab_variant,
                 if button_variant == &ButtonVariant::Primary {
-                    Visibility::Visible
+                    Display::Flex
                 } else {
-                    Visibility::Hidden
+                    Display::None
                 },
             )
         })
         .collect::<HashMap<_, _>>();
 
-    for (tab_variant, mut visibility) in &mut query {
-        if let Some(new_visibility) = tab_variant_to_visibility.get(tab_variant) {
-            *visibility = *new_visibility;
+    for (tab_variant, mut node) in &mut query {
+        if let Some(display) = tab_variant_to_visibility.get(tab_variant) {
+            node.display = *display;
         }
     }
 }
