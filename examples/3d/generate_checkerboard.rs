@@ -3,6 +3,10 @@
 //! and how to change the UV mapping at run-time.
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::core_widgets::{Activate, Callback};
+use bevy::feathers::controls::{button, ButtonProps, ButtonVariant};
+use bevy::feathers::theme::ThemedText;
+use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::{
@@ -85,6 +89,17 @@ struct SliderSensorHeight;
 #[derive(Component)]
 struct SliderFStops;
 
+#[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
+enum UiTabVariant {
+    Geometry,
+    Material,
+    Environment,
+    Camera,
+}
+
+#[derive(Component)]
+struct UiTabNode;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -109,6 +124,7 @@ fn main() {
         .add_systems(Update, update_checkerboard_material_from_sliders)
         .add_systems(Update, update_environment_from_sliders)
         .add_systems(Update, update_depth_of_field_from_sliders)
+        .add_systems(Update, update_node_visibility_from_ui_tab_variant)
         .run();
 }
 
@@ -204,7 +220,8 @@ fn setup(
     // Light up the scene.
     commands.spawn((PointLight::default(), camera_and_light_transform));
 
-    commands.spawn(demo_root());
+    let root = demo_root(&mut commands);
+    commands.spawn(root);
 
     commands.spawn(Sprite::from_image(asset_server.load("branding/icon.png")));
 }
@@ -320,7 +337,20 @@ fn create_checkerboard(settings: CheckerboardSettings) -> Mesh {
     .with_inserted_indices(Indices::U16(indices))
 }
 
-fn demo_root() -> impl Bundle {
+fn button_selector(clicked: In<Activate>, mut buttons: Query<(Entity, &mut ButtonVariant)>) {
+    info!("Clicked! {clicked:?}");
+    for (e, mut variant) in &mut buttons {
+        if clicked.0 .0 == e {
+            *variant = ButtonVariant::Primary;
+        } else {
+            *variant = ButtonVariant::Normal;
+        }
+    }
+}
+
+fn demo_root(commands: &mut Commands) -> impl Bundle {
+    let tabs_callback = commands.register_system(button_selector);
+
     (
         Node {
             width: percent(30),
@@ -347,6 +377,51 @@ fn demo_root() -> impl Bundle {
                 ..default()
             },
             children![
+                // Tabs
+                (
+                    Node {
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Start,
+                        column_gap: px(8),
+                        ..default()
+                    },
+                    children![
+                        button(
+                            ButtonProps {
+                                on_click: Callback::System(tabs_callback),
+                                ..default()
+                            },
+                            UiTabVariant::Geometry,
+                            Spawn((Text::new("Geometry"), ThemedText))
+                        ),
+                        button(
+                            ButtonProps {
+                                on_click: Callback::System(tabs_callback),
+                                ..default()
+                            },
+                            UiTabVariant::Material,
+                            Spawn((Text::new("Material"), ThemedText))
+                        ),
+                        button(
+                            ButtonProps {
+                                on_click: Callback::System(tabs_callback),
+                                ..default()
+                            },
+                            UiTabVariant::Environment,
+                            Spawn((Text::new("Environment"), ThemedText))
+                        ),
+                        button(
+                            ButtonProps {
+                                on_click: Callback::System(tabs_callback),
+                                ..default()
+                            },
+                            UiTabVariant::Camera,
+                            Spawn((Text::new("Camera"), ThemedText))
+                        ),
+                    ]
+                ),
                 // Checkerboard settings node
                 (
                     Node {
@@ -356,6 +431,8 @@ fn demo_root() -> impl Bundle {
                         row_gap: px(4.),
                         ..default()
                     },
+                    UiTabVariant::Geometry,
+                    UiTabNode,
                     children![
                         (
                             Text("Geometry".to_owned()),
@@ -412,6 +489,8 @@ fn demo_root() -> impl Bundle {
                         row_gap: px(4.),
                         ..default()
                     },
+                    UiTabVariant::Material,
+                    UiTabNode,
                     children![
                         (
                             Text("Material".to_owned()),
@@ -481,6 +560,8 @@ fn demo_root() -> impl Bundle {
                         row_gap: px(4.),
                         ..default()
                     },
+                    UiTabVariant::Environment,
+                    UiTabNode,
                     children![
                         (
                             Text("Environment".to_owned()),
@@ -524,6 +605,8 @@ fn demo_root() -> impl Bundle {
                         row_gap: px(4.),
                         ..default()
                     },
+                    UiTabVariant::Camera,
+                    UiTabNode,
                     children![
                         (
                             Text("Camera Settings".to_owned()),
@@ -581,64 +664,64 @@ fn demo_root() -> impl Bundle {
                                 ),
                             ]
                         ),
-                    ],
-                ),
-                // DoF
-                (
-                    Node {
-                        display: Display::Flex,
-                        flex_direction: FlexDirection::Column,
-                        justify_content: JustifyContent::SpaceBetween,
-                        row_gap: px(4.),
-                        ..default()
-                    },
-                    children![
+                        // DoF
                         (
-                            Text("Depth of Field".to_owned()),
-                            TextLayout::new_with_justify(Justify::Center),
-                            TextFont::from_font_size(UI_TEXT_BIG)
-                        ),
-                        // Focal distance node
-                        (
-                            Text("Focal Distance".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.3,
-                                value: 1.0,
-                                max: 10.0,
+                            Node {
+                                display: Display::Flex,
+                                flex_direction: FlexDirection::Column,
+                                justify_content: JustifyContent::SpaceBetween,
+                                row_gap: px(4.),
                                 ..default()
                             },
-                            (SliderPrecision(2), SliderFocalDistance),
-                        ),
-                        // Sensor height node
-                        (
-                            Text("Sensor Height (mm)".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 5.0,
-                                value: 18.66,
-                                max: 50.0,
-                                ..default()
-                            },
-                            (SliderPrecision(2), SliderSensorHeight),
-                        ),
-                        // F-stops node
-                        (
-                            Text("F-stops".to_owned()),
-                            TextFont::from_font_size(UI_TEXT_SMALL)
-                        ),
-                        slider(
-                            SliderProps {
-                                min: 0.1,
-                                value: 1.0,
-                                max: 3.0,
-                                ..default()
-                            },
-                            (SliderPrecision(1), SliderFStops),
+                            children![
+                                (
+                                    Text("Depth of Field".to_owned()),
+                                    TextLayout::new_with_justify(Justify::Center),
+                                    TextFont::from_font_size(UI_TEXT_BIG)
+                                ),
+                                // Focal distance node
+                                (
+                                    Text("Focal Distance".to_owned()),
+                                    TextFont::from_font_size(UI_TEXT_SMALL)
+                                ),
+                                slider(
+                                    SliderProps {
+                                        min: 0.3,
+                                        value: 1.0,
+                                        max: 10.0,
+                                        ..default()
+                                    },
+                                    (SliderPrecision(2), SliderFocalDistance),
+                                ),
+                                // Sensor height node
+                                (
+                                    Text("Sensor Height (mm)".to_owned()),
+                                    TextFont::from_font_size(UI_TEXT_SMALL)
+                                ),
+                                slider(
+                                    SliderProps {
+                                        min: 5.0,
+                                        value: 18.66,
+                                        max: 50.0,
+                                        ..default()
+                                    },
+                                    (SliderPrecision(2), SliderSensorHeight),
+                                ),
+                                // F-stops node
+                                (
+                                    Text("F-stops".to_owned()),
+                                    TextFont::from_font_size(UI_TEXT_SMALL)
+                                ),
+                                slider(
+                                    SliderProps {
+                                        min: 0.1,
+                                        value: 1.0,
+                                        max: 3.0,
+                                        ..default()
+                                    },
+                                    (SliderPrecision(1), SliderFStops),
+                                ),
+                            ],
                         ),
                     ],
                 ),
@@ -772,5 +855,30 @@ fn update_depth_of_field_from_sliders(
         dof.focal_distance = slider_focal_distance.0;
         dof.sensor_height = slider_sensor_height.0 * 1e-3; // mm to meters
         dof.aperture_f_stops = slider_f_stops.0;
+    }
+}
+
+fn update_node_visibility_from_ui_tab_variant(
+    buttons: Query<(&ButtonVariant, &UiTabVariant)>,
+    mut query: Query<(&UiTabVariant, &mut Visibility), With<UiTabNode>>,
+) {
+    let tab_variant_to_visibility = buttons
+        .iter()
+        .map(|(button_variant, tab_variant)| {
+            (
+                *tab_variant,
+                if button_variant == &ButtonVariant::Primary {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    for (tab_variant, mut visibility) in &mut query {
+        if let Some(new_visibility) = tab_variant_to_visibility.get(tab_variant) {
+            *visibility = *new_visibility;
+        }
     }
 }
