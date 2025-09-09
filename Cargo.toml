@@ -1114,6 +1114,7 @@ doc-scrape-examples = true
 required-features = [
   "experimental_bevy_feathers",
   "pbr_multi_layer_material_textures",
+  "bevy_dev_tools",
 ]
 
 [package.metadata.example.generate_checkerboard]

@@ -5,13 +5,37 @@
 //   - Is there a way to debug view it?
 // - Post-processing:
 //   - Noise
-// - Expose corner positions in world space
-//   - Optionally visualize them with gizmos
+//   - Solarisation (?)
+//   - Color jittering (?)
 // - Try using world-space corner positions, display in viewport via gizmos
-// - Checkerboard color options
-// - Checkerboard controls
 // - "Settled" component: For all things with transforms, mark as settled when not moving for e.g. 3 frames
 // - Decals!
+// - Host online wasm
+// - FPS overlay show
+//  - PR to make position configurable?
+// - Toggle vsync window settings
+
+// Scratchpad:
+//
+// Is it possible to use itertools which has a multi cartesian product iterator for planning out all the
+// combinations of settings?
+//
+// Let's say we have things which are able to be interpolated over, like:
+// - Color A -> Color B
+// - Position A -> Position B
+// - Rotation A -> Rotation B
+// - Scale A -> Scale B
+// - Focal distance A -> Focal distance B
+// - PBR settings A -> PBR settings B
+//
+// and for each of these we define a number of steps, e.g.
+// - 5 steps from Color A to Color B
+// - 3 steps from Position A to Position B
+// and so on.
+//
+// Then we can generate the cartesian product of all these iterators with the number of steps defined,
+// which gives us a list of all combinations of settings to render.
+// This way we can plan out a large number of renders with different settings if we have a goal of e.g. 100k renders.
 
 use std::ops::Deref;
 
@@ -22,9 +46,11 @@ use bevy::feathers::theme::ThemedText;
 use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::prelude::*;
+use bevy::window::PresentMode;
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, core_widgets::CoreSlider,
-    mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
+    mesh::Indices, render::render_resource::PrimitiveTopology,
 };
 use bevy::{
     core_widgets::{CoreWidgetsPlugins, SliderPrecision, SliderValue},
@@ -38,6 +64,10 @@ use bevy::{
         tab_navigation::{TabGroup, TabNavigationPlugin},
         InputDispatchPlugin,
     },
+};
+use bevy::{
+    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
+    text::FontSmoothing,
 };
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
@@ -123,6 +153,24 @@ struct SliderColorG;
 #[derive(Component)]
 struct SliderColorB;
 
+#[derive(Component)]
+struct SliderCheckerboardX;
+
+#[derive(Component)]
+struct SliderCheckerboardY;
+
+#[derive(Component)]
+struct SliderCheckerboardZ;
+
+#[derive(Component)]
+struct SliderCheckerboardRotX;
+
+#[derive(Component)]
+struct SliderCheckerboardRotY;
+
+#[derive(Component)]
+struct SliderCheckerboardRotZ;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
@@ -140,11 +188,43 @@ struct CornerId(usize);
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Checkmate".into(),
+                    present_mode: PresentMode::AutoNoVsync,
+                    ..default()
+                }),
+                ..default()
+            }),
             CoreWidgetsPlugins,
             InputDispatchPlugin,
             TabNavigationPlugin,
             FeathersPlugin,
+            FpsOverlayPlugin {
+                config: FpsOverlayConfig {
+                    text_config: TextFont {
+                        // Here we define size of our overlay
+                        font_size: 22.0,
+                        // If we want, we can use a custom font
+                        font: default(),
+                        // We could also disable font smoothing,
+                        font_smoothing: FontSmoothing::default(),
+                        ..default()
+                    },
+                    // We can also change color of the overlay
+                    text_color: palettes::css::GREEN.into(),
+                    // We can also set the refresh interval for the FPS counter
+                    refresh_interval: core::time::Duration::from_millis(10),
+                    enabled: true,
+                    frame_time_graph_config: FrameTimeGraphConfig {
+                        enabled: true,
+                        // The minimum acceptable fps
+                        min_fps: 30.0,
+                        // The target fps
+                        target_fps: 144.0,
+                    },
+                },
+            },
         ))
         .insert_resource(UiTheme(create_dark_theme()))
         .add_systems(Startup, setup)
@@ -153,6 +233,7 @@ fn main() {
         .add_systems(Update, draw_axes)
         .add_systems(Update, update_square_size_from_slider)
         .add_systems(Update, update_checkerboard_transform_from_settings)
+        .add_systems(Update, update_checkerboard_transform_from_sliders)
         .add_systems(Update, update_checkerboard_color_from_sliders)
         .add_systems(Update, update_camera_transform_from_sliders)
         .add_systems(Update, update_camera_projection_from_sliders)
@@ -231,7 +312,6 @@ fn setup(
             )),
             metallic: 0.9,
             perceptual_roughness: 0.1,
-            base_color: palettes::css::GOLD.into(),
             ..default()
         })),
         UpDown,
@@ -527,6 +607,123 @@ fn geometry_node() -> impl Bundle {
                 },
                 (SliderPrecision(0), SliderCheckerboardSquareSizeMillimeters),
             ),
+            (
+                Text("Translation".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("X".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: -2.0,
+                            value: 0.0,
+                            max: 2.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCheckerboardX),
+                    ),
+                    (
+                        Text("Y".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: -2.0,
+                            value: 0.0,
+                            max: 2.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCheckerboardY),
+                    ),
+                    (
+                        Text("Z".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: -2.0,
+                            value: 0.0,
+                            max: 2.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCheckerboardZ),
+                    ),
+                ]
+            ),
+            (
+                Text("Rotation".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Text("about world X/Y/Z (degrees)".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("X".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: -90.0,
+                            value: 0.0,
+                            max: 90.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCheckerboardRotX),
+                    ),
+                    (
+                        Text("Y".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: -90.0,
+                            value: 0.0,
+                            max: 90.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCheckerboardRotY),
+                    ),
+                    (
+                        Text("Z".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: -90.0,
+                            value: 0.0,
+                            max: 90.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderCheckerboardRotZ),
+                    )
+                ]
+            )
         ],
     )
 }
@@ -977,6 +1174,26 @@ fn update_checkerboard_transform_from_settings(
     mut checkerboard: Single<&mut Transform, With<CheckerboardSettings>>,
 ) {
     checkerboard.scale = Vec3::splat(settings.square_size);
+}
+
+fn update_checkerboard_transform_from_sliders(
+    slider_x: Single<&SliderValue, With<SliderCheckerboardX>>,
+    slider_y: Single<&SliderValue, With<SliderCheckerboardY>>,
+    slider_z: Single<&SliderValue, With<SliderCheckerboardZ>>,
+
+    slider_rot_x: Single<&SliderValue, With<SliderCheckerboardRotX>>,
+    slider_rot_y: Single<&SliderValue, With<SliderCheckerboardRotY>>,
+    slider_rot_z: Single<&SliderValue, With<SliderCheckerboardRotZ>>,
+
+    mut checkerboard: Single<&mut Transform, With<CheckerboardSettings>>,
+) {
+    checkerboard.translation = Vec3::new(slider_x.0, slider_y.0, slider_z.0);
+    checkerboard.rotation = Quat::from_euler(
+        EulerRot::XYZEx,
+        slider_rot_x.0.to_radians(),
+        slider_rot_y.0.to_radians(),
+        slider_rot_z.0.to_radians(),
+    );
 }
 
 fn generate_checkerboard(

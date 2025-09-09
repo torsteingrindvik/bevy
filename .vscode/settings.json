@@ -1,6 +1,7 @@
 {
     "rust-analyzer.cargo.features": [
         "experimental_bevy_feathers",
-        "pbr_multi_layer_material_textures"
+        "pbr_multi_layer_material_textures",
+        "bevy_dev_tools"
     ]
 }

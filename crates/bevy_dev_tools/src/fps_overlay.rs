@@ -160,7 +160,7 @@ fn setup(
             Node {
                 // We need to make sure the overlay doesn't affect the position of other UI nodes
                 position_type: PositionType::Absolute,
-                flex_direction: FlexDirection::Column,
+                flex_direction: FlexDirection::ColumnReverse,
                 ..Default::default()
             },
             // Render overlay on top of everything
