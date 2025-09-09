@@ -10,6 +10,10 @@
 // - Try using world-space corner positions, display in viewport via gizmos
 // - Checkerboard color options
 // - Checkerboard controls
+// - "Settled" component: For all things with transforms, mark as settled when not moving for e.g. 3 frames
+// - Decals!
+
+use std::ops::Deref;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::core_widgets::{Activate, Callback};
@@ -110,6 +114,15 @@ struct SliderCameraAspectRatioNumerator;
 #[derive(Component)]
 struct SliderCameraAspectRatioDenominator;
 
+#[derive(Component)]
+struct SliderColorR;
+
+#[derive(Component)]
+struct SliderColorG;
+
+#[derive(Component)]
+struct SliderColorB;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
@@ -120,6 +133,9 @@ enum UiTabVariant {
 
 #[derive(Component)]
 struct UiTabNode;
+
+#[derive(Component)]
+struct CornerId(usize);
 
 fn main() {
     App::new()
@@ -135,10 +151,9 @@ fn main() {
         .add_systems(Update, input_handler)
         .add_systems(Update, up_down)
         .add_systems(Update, draw_axes)
-        .add_systems(Update, generate_checkerboard)
-        .add_systems(Update, update_rows_cols_from_sliders)
         .add_systems(Update, update_square_size_from_slider)
         .add_systems(Update, update_checkerboard_transform_from_settings)
+        .add_systems(Update, update_checkerboard_color_from_sliders)
         .add_systems(Update, update_camera_transform_from_sliders)
         .add_systems(Update, update_camera_projection_from_sliders)
         .add_systems(Update, update_slider_height)
@@ -147,6 +162,17 @@ fn main() {
         .add_systems(Update, update_environment_from_sliders)
         .add_systems(Update, update_depth_of_field_from_sliders)
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
+        .add_systems(
+            Update,
+            (
+                update_rows_cols_from_sliders,
+                generate_checkerboard,
+                maintain_corners_as_checkerboard_children,
+                corners_gizmos,
+            )
+                .chain(),
+        )
+        .add_systems(Last, corners_gizmos)
         .run();
 }
 
@@ -163,7 +189,7 @@ fn draw_axes(mut gizmos: Gizmos, query: Query<&Transform, With<ShowAxes>>) {
     }
 }
 
-#[derive(Resource, Component, PartialEq, Clone, Copy, Debug)]
+#[derive(Component, Resource, PartialEq, Clone, Copy, Debug)]
 struct CheckerboardSettings {
     rows: usize,
     cols: usize,
@@ -172,17 +198,6 @@ struct CheckerboardSettings {
 }
 
 fn image_render_target(images: &mut Assets<Image>) -> Handle<Image> {
-    // let mut image = Image::new_uninit(
-    //     bevy_render::render_resource::Extent3d {
-    //         width: 1920,
-    //         height: 1080,
-    //         depth_or_array_layers: 1,
-    //     },
-    //     bevy_render::render_resource::TextureDimension::D2,
-    //     bevy_render::render_resource::TextureFormat::bevy_default(),
-    //     RenderAssetUsages::default(),
-    // );
-
     let mut image = Image::new_target_texture(1920, 1080, TextureFormat::bevy_default());
     image.sampler = ImageSampler::nearest();
 
@@ -529,7 +544,7 @@ fn material_node() -> impl Bundle {
         UiTabNode,
         children![
             (
-                Text("Material".to_owned()),
+                Text("PBR".to_owned()),
                 TextLayout::new_with_justify(Justify::Center),
                 TextFont::from_font_size(UI_TEXT_BIG)
             ),
@@ -584,6 +599,62 @@ fn material_node() -> impl Bundle {
                     ..default()
                 },
                 (SliderPrecision(2), SliderClearcoatRoughness),
+            ),
+            (
+                Text("Color".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("R".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 1.0,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderColorR),
+                    ),
+                    (
+                        Text("G".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 1.0,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderColorG),
+                    ),
+                    (
+                        Text("B".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 1.0,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderColorB),
+                    ),
+                ]
             ),
         ],
     )
@@ -910,20 +981,37 @@ fn update_checkerboard_transform_from_settings(
 
 fn generate_checkerboard(
     settings: Res<CheckerboardSettings>,
-    checkerboard: Single<(&mut Mesh3d, &CheckerboardSettings)>,
+    mut checkerboards: Query<(&mut Mesh3d, &mut CheckerboardSettings)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     if settings.is_changed() {
-        let (mut mesh, mesh_settings) = checkerboard.into_inner();
+        for (mut mesh, mut mesh_settings) in &mut checkerboards {
+            if *settings == *mesh_settings {
+                // don't recreate mesh if settings are the same
+                continue;
+            }
 
-        if *settings == *mesh_settings {
-            // don't recreate mesh if settings are the same
-            return;
+            info!("changed to {:?}", *settings);
+
+            **mesh = meshes.add(create_checkerboard(*settings));
+            *mesh_settings = *settings;
         }
+    }
+}
 
-        info!("changed to {:?}", *settings);
+fn update_checkerboard_color_from_sliders(
+    slider_r: Single<&SliderValue, With<SliderColorR>>,
+    slider_g: Single<&SliderValue, With<SliderColorG>>,
+    slider_b: Single<&SliderValue, With<SliderColorB>>,
+    checkerboard: Single<&MeshMaterial3d<StandardMaterial>, With<CheckerboardSettings>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let color = Color::srgb_from_array([slider_r.0, slider_g.0, slider_b.0]);
 
-        **mesh = meshes.add(create_checkerboard(*settings));
+    let handle = checkerboard.0.clone();
+
+    if let Some(material) = materials.get_mut(&handle) {
+        material.base_color = color;
     }
 }
 
@@ -1041,6 +1129,67 @@ fn update_node_visibility_from_ui_tab_variant(
     for (tab_variant, mut node) in &mut query {
         if let Some(display) = tab_variant_to_visibility.get(tab_variant) {
             node.display = *display;
+        }
+    }
+}
+
+fn maintain_corners_as_checkerboard_children(
+    mut commands: Commands,
+    checkerboard_res: Res<CheckerboardSettings>,
+    checkerboards: Query<(Entity, &CheckerboardSettings)>,
+) {
+    if checkerboard_res.is_changed() {
+        for (checkerboard, settings) in &checkerboards {
+            let CheckerboardSettings { rows, cols, .. } = *settings;
+
+            info!("making new corner position kids for {checkerboard}, settings: {rows}x{cols} vs {:?}", checkerboard_res.deref());
+
+            // Start over
+            commands.entity(checkerboard).despawn_children();
+
+            let mut children = vec![];
+
+            let half = Vec3::new(cols as f32, 0.0, rows as f32) / 2.0;
+
+            let mut id = 0;
+            for row in 1..rows {
+                for col in 1..cols {
+                    let position = Vec3::new(col as f32, 0.0, row as f32) - half;
+
+                    children.push(
+                        commands
+                            .spawn((Transform::from_translation(position), CornerId(id)))
+                            .id(),
+                    );
+                    id += 1;
+                }
+            }
+
+            commands.entity(checkerboard).add_children(&children);
+        }
+    }
+}
+
+fn corners_gizmos(
+    mut gizmos: Gizmos,
+    checkerboards: Query<(&Children, &Transform), With<CheckerboardSettings>>,
+    corners: Query<(&GlobalTransform, &CornerId)>,
+) {
+    for (checkerboard_children, checkerboard_transform) in &checkerboards {
+        let num_corners = checkerboard_children.len();
+
+        let green = palettes::basic::GREEN;
+        let red = palettes::basic::RED;
+
+        for child in checkerboard_children.iter() {
+            if let Ok((corner_transform, corner_id)) = corners.get(child) {
+                let color = green.mix(&red, corner_id.0 as f32 / num_corners as f32);
+                gizmos.sphere(
+                    corner_transform.translation(),
+                    checkerboard_transform.scale[0] / 10.,
+                    color,
+                );
+            }
         }
     }
 }
