@@ -11,8 +11,6 @@
 // - "Settled" component: For all things with transforms, mark as settled when not moving for e.g. 3 frames
 // - Decals!
 // - Host online wasm
-// - FPS overlay show
-//  - PR to make position configurable?
 // - Toggle vsync window settings
 
 // Scratchpad:
@@ -175,6 +173,9 @@ struct SliderCheckerboardRotZ;
 #[derive(Component)]
 struct CheckboxShowGizmos;
 
+#[derive(Component)]
+struct CheckboxShowFpsOverlay;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
@@ -249,6 +250,7 @@ fn main() {
         .add_systems(Update, update_depth_of_field_from_sliders)
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
         .add_systems(Update, enable_gizmos)
+        .add_systems(Update, enable_fps_overlay)
         .add_systems(
             Update,
             (
@@ -1135,7 +1137,7 @@ fn debug_node() -> impl Bundle {
                 CheckboxProps {
                     on_change: Callback::Ignore,
                 },
-                Checked,
+                CheckboxShowFpsOverlay,
                 Spawn((Text::new("Show FPS"), ThemedText))
             ),
         ],
@@ -1467,4 +1469,12 @@ fn enable_gizmos(
 ) {
     let (config, _) = gizmos.config_mut::<DefaultGizmoConfigGroup>();
     config.enabled = show_gizmos.is_some();
+}
+
+fn enable_fps_overlay(
+    mut fps: ResMut<FpsOverlayConfig>,
+    show_gizmos: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
+) {
+    fps.enabled = show_gizmos.is_some();
+    fps.frame_time_graph_config.enabled = show_gizmos.is_some();
 }
