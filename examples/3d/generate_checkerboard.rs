@@ -40,12 +40,13 @@
 use std::ops::Deref;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::feathers::controls::{button, ButtonProps, ButtonVariant};
+use bevy::feathers::controls::{button, checkbox, ButtonProps, ButtonVariant, CheckboxProps};
 use bevy::feathers::theme::ThemedText;
 use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
+use bevy::ui::Checked;
 use bevy::ui_widgets::{Activate, Callback, Slider, WidgetBehaviorPlugins};
 use bevy::window::PresentMode;
 use bevy::{
@@ -171,12 +172,16 @@ struct SliderCheckerboardRotY;
 #[derive(Component)]
 struct SliderCheckerboardRotZ;
 
+#[derive(Component)]
+struct CheckboxShowGizmos;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
     Material,
     Environment,
     Camera,
+    Debug,
 }
 
 #[derive(Component)]
@@ -243,6 +248,7 @@ fn main() {
         .add_systems(Update, update_environment_from_sliders)
         .add_systems(Update, update_depth_of_field_from_sliders)
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
+        .add_systems(Update, enable_gizmos)
         .add_systems(
             Update,
             (
@@ -545,6 +551,14 @@ fn tabs_node(commands: &mut Commands) -> impl Bundle {
                 },
                 UiTabVariant::Camera,
                 Spawn((Text::new("Camera"), ThemedText))
+            ),
+            button(
+                ButtonProps {
+                    on_click: Callback::System(tabs_callback),
+                    ..default()
+                },
+                UiTabVariant::Debug,
+                Spawn((Text::new("Debug"), ThemedText))
             ),
         ],
     )
@@ -1093,6 +1107,41 @@ fn camera_node() -> impl Bundle {
     )
 }
 
+fn debug_node() -> impl Bundle {
+    (
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
+            row_gap: px(UI_ROW_GAP_PER_TAB),
+            ..default()
+        },
+        UiTabVariant::Debug,
+        UiTabNode,
+        children![
+            (
+                Text("Depth of Field".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                (Checked, CheckboxShowGizmos),
+                Spawn((Text::new("Show gizmos"), ThemedText))
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                Checked,
+                Spawn((Text::new("Show FPS"), ThemedText))
+            ),
+        ],
+    )
+}
+
 fn root_node(
     commands: &mut Commands,
     camera_entity: Entity,
@@ -1129,7 +1178,8 @@ fn root_node(
                     geometry_node(),
                     material_node(),
                     environment_node(),
-                    camera_node()
+                    camera_node(),
+                    debug_node()
                 ]
             ),
             (
@@ -1409,4 +1459,12 @@ fn corners_gizmos(
             }
         }
     }
+}
+
+fn enable_gizmos(
+    mut gizmos: ResMut<GizmoConfigStore>,
+    show_gizmos: Option<Single<&CheckboxShowGizmos, With<Checked>>>,
+) {
+    let (config, _) = gizmos.config_mut::<DefaultGizmoConfigGroup>();
+    config.enabled = show_gizmos.is_some();
 }
