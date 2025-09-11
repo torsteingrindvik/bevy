@@ -46,7 +46,7 @@ use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Activate, Callback, Slider, WidgetBehaviorPlugins};
-use bevy::window::PresentMode;
+use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
     render::render_resource::PrimitiveTopology,
@@ -176,6 +176,9 @@ struct CheckboxShowGizmos;
 #[derive(Component)]
 struct CheckboxShowFpsOverlay;
 
+#[derive(Component)]
+struct CheckboxUseVsync;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
@@ -251,6 +254,7 @@ fn main() {
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
         .add_systems(Update, enable_gizmos)
         .add_systems(Update, enable_fps_overlay)
+        .add_systems(Update, enable_vsync)
         .add_systems(
             Update,
             (
@@ -1140,6 +1144,13 @@ fn debug_node() -> impl Bundle {
                 CheckboxShowFpsOverlay,
                 Spawn((Text::new("Show FPS"), ThemedText))
             ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                (Checked, CheckboxUseVsync),
+                Spawn((Text::new("Vsync"), ThemedText))
+            ),
         ],
     )
 }
@@ -1473,8 +1484,19 @@ fn enable_gizmos(
 
 fn enable_fps_overlay(
     mut fps: ResMut<FpsOverlayConfig>,
-    show_gizmos: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
+    show_fps: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
 ) {
-    fps.enabled = show_gizmos.is_some();
-    fps.frame_time_graph_config.enabled = show_gizmos.is_some();
+    fps.enabled = show_fps.is_some();
+    fps.frame_time_graph_config.enabled = show_fps.is_some();
+}
+
+fn enable_vsync(
+    mut window: Single<&mut Window, With<PrimaryWindow>>,
+    use_vsync: Option<Single<&CheckboxUseVsync, With<Checked>>>,
+) {
+    window.present_mode = if use_vsync.is_some() {
+        PresentMode::AutoVsync
+    } else {
+        PresentMode::AutoNoVsync
+    }
 }
