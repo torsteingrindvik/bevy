@@ -40,20 +40,23 @@
 use std::ops::Deref;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::core_widgets::{Activate, Callback};
 use bevy::feathers::controls::{button, ButtonProps, ButtonVariant};
 use bevy::feathers::theme::ThemedText;
 use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
+use bevy::ui_widgets::{Activate, Callback, Slider, WidgetBehaviorPlugins};
 use bevy::window::PresentMode;
 use bevy::{
-    asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, core_widgets::CoreSlider,
-    mesh::Indices, render::render_resource::PrimitiveTopology,
+    asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
+    render::render_resource::PrimitiveTopology,
 };
 use bevy::{
-    core_widgets::{CoreWidgetsPlugins, SliderPrecision, SliderValue},
+    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
+    text::FontSmoothing,
+};
+use bevy::{
     feathers::{
         controls::{slider, SliderProps},
         dark_theme::create_dark_theme,
@@ -64,10 +67,7 @@ use bevy::{
         tab_navigation::{TabGroup, TabNavigationPlugin},
         InputDispatchPlugin,
     },
-};
-use bevy::{
-    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
-    text::FontSmoothing,
+    ui_widgets::{SliderPrecision, SliderValue},
 };
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
@@ -196,7 +196,7 @@ fn main() {
                 }),
                 ..default()
             }),
-            CoreWidgetsPlugins,
+            WidgetBehaviorPlugins,
             InputDispatchPlugin,
             TabNavigationPlugin,
             FeathersPlugin,
@@ -1259,14 +1259,14 @@ fn update_camera_projection_from_sliders(
     perspective.aspect_ratio = slider_aspect_ratio_numerator.0 / slider_aspect_ratio_denominator.0;
 }
 
-fn update_slider_height(mut sliders: Query<&mut Node, With<CoreSlider>>) {
+fn update_slider_height(mut sliders: Query<&mut Node, With<Slider>>) {
     for mut node in &mut sliders {
         node.height = px(12);
     }
 }
 
 fn update_slider_font_size(
-    mut q_sliders: Query<Entity, With<CoreSlider>>,
+    mut q_sliders: Query<Entity, With<Slider>>,
     q_children: Query<&Children>,
     mut q_slider_text: Query<&mut TextFont>,
 ) {
