@@ -4625,8 +4625,8 @@ doc-scrape-examples = true
 [package.metadata.example.test_invalid_skinned_mesh]
 hidden = true
 
-[profile.dev]
-codegen-backend = "cranelift"
+# [profile.dev]
+# codegen-backend = "cranelift"
 
 [profile.wasm-release]
 inherits = "release"

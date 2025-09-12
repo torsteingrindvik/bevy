@@ -11,7 +11,7 @@
 // - "Settled" component: For all things with transforms, mark as settled when not moving for e.g. 3 frames
 // - Decals!
 // - Host online wasm
-// - Toggle vsync window settings
+// - MSAA control
 
 // Scratchpad:
 //
@@ -38,14 +38,17 @@
 use std::ops::Deref;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::feathers::controls::{button, checkbox, ButtonProps, ButtonVariant, CheckboxProps};
+use bevy::dev_tools::picking_debug::{DebugPickingMode, DebugPickingPlugin};
+use bevy::feathers::controls::{
+    button, checkbox, radio, ButtonProps, ButtonVariant, CheckboxProps,
+};
 use bevy::feathers::theme::ThemedText;
 use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::ui::Checked;
-use bevy::ui_widgets::{Activate, Callback, Slider, WidgetBehaviorPlugins};
+use bevy::ui_widgets::{Activate, Callback, RadioButton, RadioGroup, Slider, UiWidgetsPlugins};
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
@@ -179,11 +182,48 @@ struct CheckboxShowFpsOverlay;
 #[derive(Component)]
 struct CheckboxUseVsync;
 
+#[derive(Component)]
+struct SliderLightDirectionX;
+
+#[derive(Component)]
+struct SliderLightDirectionY;
+
+#[derive(Component)]
+struct SliderLightDirectionZ;
+
+#[derive(Component)]
+struct SliderLightPointX;
+
+#[derive(Component)]
+struct SliderLightPointY;
+
+#[derive(Component)]
+struct SliderLightPointZ;
+
+#[derive(Component)]
+struct SliderLightDirectionColorR;
+
+#[derive(Component)]
+struct SliderLightDirectionColorG;
+
+#[derive(Component)]
+struct SliderLightDirectionColorB;
+
+#[derive(Component)]
+struct SliderLightPointColorR;
+
+#[derive(Component)]
+struct SliderLightPointColorG;
+
+#[derive(Component)]
+struct SliderLightPointColorB;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
     Material,
     Environment,
+    Light,
     Camera,
     Debug,
 }
@@ -197,15 +237,21 @@ struct CornerId(usize);
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Checkmate".into(),
-                    present_mode: PresentMode::AutoNoVsync,
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Checkmate".into(),
+                        present_mode: PresentMode::AutoNoVsync,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(bevy::log::LogPlugin {
+                    filter: "bevy_dev_tools=trace".into(), // Show picking logs trace level and up
                     ..default()
                 }),
-                ..default()
-            }),
-            WidgetBehaviorPlugins,
+            DebugPickingPlugin,
+            UiWidgetsPlugins,
             InputDispatchPlugin,
             TabNavigationPlugin,
             FeathersPlugin,
@@ -236,6 +282,7 @@ fn main() {
             },
         ))
         .insert_resource(UiTheme(create_dark_theme()))
+        .insert_resource(DebugPickingMode::Normal)
         .add_systems(Startup, setup)
         .add_systems(Update, input_handler)
         .add_systems(Update, up_down)
@@ -255,6 +302,8 @@ fn main() {
         .add_systems(Update, enable_gizmos)
         .add_systems(Update, enable_fps_overlay)
         .add_systems(Update, enable_vsync)
+        .add_systems(Update, update_directional_lights_from_sliders)
+        .add_systems(Update, update_point_lights_from_sliders)
         .add_systems(
             Update,
             (
@@ -322,8 +371,10 @@ fn setup(
                 "textures/ScratchedGold-Normal.png",
                 |settings: &mut ImageLoaderSettings| settings.is_srgb = false,
             )),
+            // base_color_texture: Some(asset_server.load("textures/ScratchedGold-Normal.png")),
             metallic: 0.9,
             perceptual_roughness: 0.1,
+            // base
             ..default()
         })),
         UpDown,
@@ -342,6 +393,7 @@ fn setup(
     commands
         .spawn((
             Camera3d::default(),
+            Msaa::Sample4,
             Hdr,
             Camera {
                 clear_color: ClearColorConfig::Custom(palettes::tailwind::PINK_600.into()),
@@ -349,7 +401,7 @@ fn setup(
                 ..default()
             },
             camera_and_light_transform,
-            Tonemapping::TonyMcMapface,
+            Tonemapping::AcesFitted,
             Bloom::NATURAL,
             DepthOfField {
                 mode: DepthOfFieldMode::Bokeh,
@@ -380,8 +432,8 @@ fn setup(
         ))
         .id();
 
-    // Light up the scene.
     commands.spawn((PointLight::default(), camera_and_light_transform));
+    commands.spawn((DirectionalLight::default(), camera_and_light_transform));
 
     let root = root_node(&mut commands, ui_camera, &scene_image);
     commands.spawn(root);
@@ -511,7 +563,7 @@ fn button_selector(clicked: In<Activate>, mut buttons: Query<(Entity, &mut Butto
     }
 }
 
-fn tabs_node(commands: &mut Commands) -> impl Bundle {
+fn tabs_node(commands: &mut Commands) -> impl Bundle + use<> {
     let tabs_callback = commands.register_system(button_selector);
 
     // Tabs
@@ -519,8 +571,10 @@ fn tabs_node(commands: &mut Commands) -> impl Bundle {
         Node {
             display: Display::Flex,
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Start,
+            row_gap: px(8),
             column_gap: px(8),
             ..default()
         },
@@ -549,6 +603,14 @@ fn tabs_node(commands: &mut Commands) -> impl Bundle {
                 },
                 UiTabVariant::Environment,
                 Spawn((Text::new("Environment"), ThemedText))
+            ),
+            button(
+                ButtonProps {
+                    on_click: Callback::System(tabs_callback),
+                    ..default()
+                },
+                UiTabVariant::Light,
+                Spawn((Text::new("Light"), ThemedText))
             ),
             button(
                 ButtonProps {
@@ -924,6 +986,242 @@ fn environment_node() -> impl Bundle {
     )
 }
 
+fn light_node() -> impl Bundle {
+    (
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
+            row_gap: px(UI_ROW_GAP_PER_TAB),
+            ..default()
+        },
+        UiTabVariant::Light,
+        UiTabNode,
+        children![
+            (
+                Text("Light".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Text("Direction".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            // Direction XYZ
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("X".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightDirectionX),
+                    ),
+                    (
+                        Text("Y".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.1,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightDirectionY),
+                    ),
+                    (
+                        Text("Z".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightDirectionZ),
+                    ),
+                ]
+            ),
+            // Direction RGB
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("R".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightDirectionColorR),
+                    ),
+                    (
+                        Text("G".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.1,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightDirectionColorG),
+                    ),
+                    (
+                        Text("B".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightDirectionColorB),
+                    ),
+                ]
+            ),
+            (
+                Text("Point".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("X".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightPointX),
+                    ),
+                    (
+                        Text("Y".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.1,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightPointY),
+                    ),
+                    (
+                        Text("Z".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightPointZ),
+                    ),
+                ]
+            ),
+            // Point RGB
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("R".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightPointColorR),
+                    ),
+                    (
+                        Text("G".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.1,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightPointColorG),
+                    ),
+                    (
+                        Text("B".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.8,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderLightPointColorB),
+                    ),
+                ]
+            ),
+        ],
+    )
+}
+
 fn camera_node() -> impl Bundle {
     (
         Node {
@@ -1113,7 +1411,19 @@ fn camera_node() -> impl Bundle {
     )
 }
 
-fn debug_node() -> impl Bundle {
+fn debug_node(commands: &mut Commands) -> impl Bundle {
+    let radio_check = commands.register_system(
+        |ent: In<Activate>, q_radio: Query<Entity, With<RadioButton>>, mut commands: Commands| {
+            for radio in q_radio.iter() {
+                if radio == ent.0 .0 {
+                    commands.entity(radio).insert(Checked);
+                } else {
+                    commands.entity(radio).remove::<Checked>();
+                }
+            }
+        },
+    );
+
     (
         Node {
             display: Display::Flex,
@@ -1126,7 +1436,7 @@ fn debug_node() -> impl Bundle {
         UiTabNode,
         children![
             (
-                Text("Depth of Field".to_owned()),
+                Text("Debug".to_owned()),
                 TextLayout::new_with_justify(Justify::Center),
                 TextFont::from_font_size(UI_TEXT_BIG)
             ),
@@ -1151,6 +1461,27 @@ fn debug_node() -> impl Bundle {
                 (Checked, CheckboxUseVsync),
                 Spawn((Text::new("Vsync"), ThemedText))
             ),
+            // Picking
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    column_gap: px(4),
+                    ..default()
+                },
+                RadioGroup {
+                    on_change: Callback::System(radio_check),
+                },
+                children![
+                    (
+                        Text("Picking".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    radio(Checked, Spawn((Text::new("Disabled"), ThemedText))),
+                    radio((), Spawn((Text::new("Normal"), ThemedText))),
+                    radio((), Spawn((Text::new("Noisy"), ThemedText))),
+                ]
+            )
         ],
     )
 }
@@ -1160,6 +1491,8 @@ fn root_node(
     camera_entity: Entity,
     scene_image: &Handle<Image>,
 ) -> impl Bundle {
+    let tabs = tabs_node(commands);
+
     (
         Node {
             width: percent(100),
@@ -1182,17 +1515,19 @@ fn root_node(
                     justify_content: JustifyContent::Start,
                     padding: UiRect::all(px(8)),
                     row_gap: px(16),
-                    width: percent(30),
-                    min_width: px(400),
+                    width: auto(),
+                    // min_width: px(400),
+                    max_width: percent(40),
                     ..default()
                 },
                 children![
-                    tabs_node(commands),
+                    tabs,
                     geometry_node(),
                     material_node(),
                     environment_node(),
+                    light_node(),
                     camera_node(),
-                    debug_node()
+                    debug_node(commands)
                 ]
             ),
             (
@@ -1498,5 +1833,44 @@ fn enable_vsync(
         PresentMode::AutoVsync
     } else {
         PresentMode::AutoNoVsync
+    }
+}
+
+fn update_point_lights_from_sliders(
+    slider_point_x: Single<&SliderValue, With<SliderLightPointX>>,
+    slider_point_y: Single<&SliderValue, With<SliderLightPointY>>,
+    slider_point_z: Single<&SliderValue, With<SliderLightPointZ>>,
+
+    slider_point_r: Single<&SliderValue, With<SliderLightPointColorR>>,
+    slider_point_g: Single<&SliderValue, With<SliderLightPointColorG>>,
+    slider_point_b: Single<&SliderValue, With<SliderLightPointColorB>>,
+
+    mut q_point_light: Query<(&mut Transform, &mut PointLight)>,
+) {
+    for (mut transform, mut point_light) in &mut q_point_light {
+        transform.translation = Vec3::new(slider_point_x.0, slider_point_y.0, slider_point_z.0);
+
+        point_light.color =
+            Color::srgb_from_array([slider_point_r.0, slider_point_g.0, slider_point_b.0]);
+    }
+}
+
+fn update_directional_lights_from_sliders(
+    slider_dir_x: Single<&SliderValue, With<SliderLightDirectionX>>,
+    slider_dir_y: Single<&SliderValue, With<SliderLightDirectionY>>,
+    slider_dir_z: Single<&SliderValue, With<SliderLightDirectionZ>>,
+
+    slider_dir_r: Single<&SliderValue, With<SliderLightDirectionColorR>>,
+    slider_dir_g: Single<&SliderValue, With<SliderLightDirectionColorG>>,
+    slider_dir_b: Single<&SliderValue, With<SliderLightDirectionColorB>>,
+
+    mut q_directional_light: Query<(&mut Transform, &mut DirectionalLight)>,
+) {
+    for (mut transform, mut dir_light) in &mut q_directional_light {
+        let direction =
+            Vec3::new(slider_dir_x.0, slider_dir_y.0, slider_dir_z.0).normalize_or_zero();
+        transform.rotation = Quat::from_rotation_arc(Vec3::Y, direction);
+
+        dir_light.color = Color::srgb_from_array([slider_dir_r.0, slider_dir_g.0, slider_dir_b.0]);
     }
 }
