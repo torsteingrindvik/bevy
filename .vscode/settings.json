@@ -3,5 +3,6 @@
         "experimental_bevy_feathers",
         "pbr_multi_layer_material_textures",
         "bevy_dev_tools",
+        "bevy_ui_debug"
     ]
 }

@@ -37,6 +37,7 @@
 
 use std::ops::Deref;
 
+use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::dev_tools::picking_debug::{DebugPickingMode, DebugPickingPlugin};
 use bevy::feathers::controls::{
@@ -218,6 +219,24 @@ struct SliderLightPointColorG;
 #[derive(Component)]
 struct SliderLightPointColorB;
 
+#[derive(Component)]
+struct CheckboxUiDebugEnabled;
+
+#[derive(Component)]
+struct CheckboxUiDebugShowHidden;
+
+#[derive(Component)]
+struct CheckboxUiDebugShowClipped;
+
+#[derive(Component)]
+struct RadioPickingDebugDisabled;
+
+#[derive(Component)]
+struct RadioPickingDebugNormal;
+
+#[derive(Component)]
+struct RadioPickingDebugNoisy;
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
@@ -255,31 +274,31 @@ fn main() {
             InputDispatchPlugin,
             TabNavigationPlugin,
             FeathersPlugin,
-            FpsOverlayPlugin {
-                config: FpsOverlayConfig {
-                    text_config: TextFont {
-                        // Here we define size of our overlay
-                        font_size: 22.0,
-                        // If we want, we can use a custom font
-                        font: default(),
-                        // We could also disable font smoothing,
-                        font_smoothing: FontSmoothing::default(),
-                        ..default()
-                    },
-                    // We can also change color of the overlay
-                    text_color: palettes::css::GREEN.into(),
-                    // We can also set the refresh interval for the FPS counter
-                    refresh_interval: core::time::Duration::from_millis(10),
-                    enabled: true,
-                    frame_time_graph_config: FrameTimeGraphConfig {
-                        enabled: true,
-                        // The minimum acceptable fps
-                        min_fps: 30.0,
-                        // The target fps
-                        target_fps: 144.0,
-                    },
-                },
-            },
+            // FpsOverlayPlugin {
+            //     config: FpsOverlayConfig {
+            //         text_config: TextFont {
+            //             // Here we define size of our overlay
+            //             font_size: 22.0,
+            //             // If we want, we can use a custom font
+            //             font: default(),
+            //             // We could also disable font smoothing,
+            //             font_smoothing: FontSmoothing::default(),
+            //             ..default()
+            //         },
+            //         // We can also change color of the overlay
+            //         text_color: palettes::css::GREEN.into(),
+            //         // We can also set the refresh interval for the FPS counter
+            //         refresh_interval: core::time::Duration::from_millis(10),
+            //         enabled: true,
+            //         frame_time_graph_config: FrameTimeGraphConfig {
+            //             enabled: true,
+            //             // The minimum acceptable fps
+            //             min_fps: 30.0,
+            //             // The target fps
+            //             target_fps: 144.0,
+            //         },
+            //     },
+            // },
         ))
         .insert_resource(UiTheme(create_dark_theme()))
         .insert_resource(DebugPickingMode::Normal)
@@ -300,10 +319,12 @@ fn main() {
         .add_systems(Update, update_depth_of_field_from_sliders)
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
         .add_systems(Update, enable_gizmos)
-        .add_systems(Update, enable_fps_overlay)
+        // .add_systems(Update, enable_fps_overlay)
         .add_systems(Update, enable_vsync)
         .add_systems(Update, update_directional_lights_from_sliders)
         .add_systems(Update, update_point_lights_from_sliders)
+        .add_systems(Update, set_ui_debug_options)
+        .add_systems(Update, set_picking_debug)
         .add_systems(
             Update,
             (
@@ -400,6 +421,7 @@ fn setup(
                 target: bevy::camera::RenderTarget::Image(scene_image.clone().into()),
                 ..default()
             },
+            DepthPrepass,
             camera_and_light_transform,
             Tonemapping::AcesFitted,
             Bloom::NATURAL,
@@ -437,8 +459,6 @@ fn setup(
 
     let root = root_node(&mut commands, ui_camera, &scene_image);
     commands.spawn(root);
-
-    // commands.spawn(Sprite::from_image(asset_server.load("branding/icon.png")));
 }
 
 // System to receive input from the user,
@@ -1477,10 +1497,46 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                         Text("Picking".to_owned()),
                         TextFont::from_font_size(UI_TEXT_SMALL)
                     ),
-                    radio(Checked, Spawn((Text::new("Disabled"), ThemedText))),
-                    radio((), Spawn((Text::new("Normal"), ThemedText))),
-                    radio((), Spawn((Text::new("Noisy"), ThemedText))),
+                    radio(
+                        (Checked, RadioPickingDebugDisabled),
+                        Spawn((Text::new("Disabled"), ThemedText))
+                    ),
+                    radio(
+                        RadioPickingDebugNormal,
+                        Spawn((Text::new("Normal"), ThemedText))
+                    ),
+                    radio(
+                        RadioPickingDebugNoisy,
+                        Spawn((Text::new("Noisy"), ThemedText))
+                    ),
                 ]
+            ),
+            // UI debug
+            (
+                Text("UI debug".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                CheckboxUiDebugEnabled,
+                Spawn((Text::new("Enabled"), ThemedText))
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                CheckboxUiDebugShowHidden,
+                Spawn((Text::new("Show hidden"), ThemedText))
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                CheckboxUiDebugShowClipped,
+                Spawn((Text::new("Show clipped"), ThemedText))
             )
         ],
     )
@@ -1516,7 +1572,6 @@ fn root_node(
                     padding: UiRect::all(px(8)),
                     row_gap: px(16),
                     width: auto(),
-                    // min_width: px(400),
                     max_width: percent(40),
                     ..default()
                 },
@@ -1817,13 +1872,13 @@ fn enable_gizmos(
     config.enabled = show_gizmos.is_some();
 }
 
-fn enable_fps_overlay(
-    mut fps: ResMut<FpsOverlayConfig>,
-    show_fps: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
-) {
-    fps.enabled = show_fps.is_some();
-    fps.frame_time_graph_config.enabled = show_fps.is_some();
-}
+// fn enable_fps_overlay(
+//     mut config: ResMut<FpsOverlayConfig>,
+//     show_fps: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
+// ) {
+//     config.enabled = show_fps.is_some();
+//     config.frame_time_graph_config.enabled = show_fps.is_some();
+// }
 
 fn enable_vsync(
     mut window: Single<&mut Window, With<PrimaryWindow>>,
@@ -1872,5 +1927,31 @@ fn update_directional_lights_from_sliders(
         transform.rotation = Quat::from_rotation_arc(Vec3::Y, direction);
 
         dir_light.color = Color::srgb_from_array([slider_dir_r.0, slider_dir_g.0, slider_dir_b.0]);
+    }
+}
+
+fn set_ui_debug_options(
+    mut opts: ResMut<UiDebugOptions>,
+    checkbox_ui_debug_enabled: Option<Single<&CheckboxUiDebugEnabled, With<Checked>>>,
+    checkbox_ui_debug_show_hidden: Option<Single<&CheckboxUiDebugShowHidden, With<Checked>>>,
+    checkbox_ui_debug_show_clipped: Option<Single<&CheckboxUiDebugShowClipped, With<Checked>>>,
+) {
+    opts.enabled = checkbox_ui_debug_enabled.is_some();
+    opts.show_clipped = checkbox_ui_debug_show_clipped.is_some();
+    opts.show_hidden = checkbox_ui_debug_show_hidden.is_some();
+}
+
+fn set_picking_debug(
+    mut mode: ResMut<DebugPickingMode>,
+    radio_disabled: Option<Single<&RadioPickingDebugDisabled, With<Checked>>>,
+    radio_normal: Option<Single<&RadioPickingDebugNormal, With<Checked>>>,
+    radio_noisy: Option<Single<&RadioPickingDebugNoisy, With<Checked>>>,
+) {
+    if radio_disabled.is_some() {
+        *mode = DebugPickingMode::Disabled;
+    } else if radio_normal.is_some() {
+        *mode = DebugPickingMode::Normal;
+    } else if radio_noisy.is_some() {
+        *mode = DebugPickingMode::Noisy;
     }
 }
