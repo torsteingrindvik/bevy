@@ -12,6 +12,8 @@
 // - Decals!
 // - Host online wasm
 // - MSAA control
+// - Another render target: Shows the scene from afar such that we can see gizmos for lights etc., maybe orthographic?
+// - Macro for creating marker component
 
 // Scratchpad:
 //
@@ -35,8 +37,9 @@
 // which gives us a list of all combinations of settings to render.
 // This way we can plan out a large number of renders with different settings if we have a goal of e.g. 100k renders.
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
+use bevy::anti_alias::fxaa::Fxaa;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::dev_tools::picking_debug::{DebugPickingMode, DebugPickingPlugin};
@@ -44,6 +47,8 @@ use bevy::feathers::controls::{
     button, checkbox, radio, ButtonProps, ButtonVariant, CheckboxProps,
 };
 use bevy::feathers::theme::ThemedText;
+use bevy::math::Affine2;
+use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
 use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
@@ -76,16 +81,12 @@ use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
 
+use crate::camera_controller::{CameraController, CameraControllerPlugin};
+
 const UI_TEXT_SMALL: f32 = 12.0;
 const UI_TEXT_BIG: f32 = 16.0;
 
 const UI_ROW_GAP_PER_TAB: f32 = 8.0;
-
-// Define a "marker" component to mark the custom mesh. Marker components are often used in Bevy for
-// filtering entities in queries with `With`, they're usually not queried directly since they don't
-// contain information within them.
-#[derive(Component)]
-struct CustomUV;
 
 #[derive(Component)]
 struct UpDown;
@@ -237,6 +238,12 @@ struct RadioPickingDebugNormal;
 #[derive(Component)]
 struct RadioPickingDebugNoisy;
 
+#[derive(Component)]
+struct UiTabNode;
+
+#[derive(Component)]
+struct CornerId(usize);
+
 #[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Debug)]
 enum UiTabVariant {
     Geometry,
@@ -248,10 +255,25 @@ enum UiTabVariant {
 }
 
 #[derive(Component)]
-struct UiTabNode;
+struct SliderDecalColorR;
 
 #[derive(Component)]
-struct CornerId(usize);
+struct SliderDecalColorG;
+
+#[derive(Component)]
+struct SliderDecalColorB;
+
+#[derive(Component)]
+struct SliderDecalColorA;
+
+#[derive(Component)]
+struct SliderDecalScale;
+
+#[derive(Component)]
+struct SliderDecalAngle;
+
+#[path = "../helpers/camera_controller.rs"]
+mod camera_controller;
 
 fn main() {
     App::new()
@@ -269,41 +291,41 @@ fn main() {
                     filter: "bevy_dev_tools=trace".into(), // Show picking logs trace level and up
                     ..default()
                 }),
+            CameraControllerPlugin,
             DebugPickingPlugin,
             UiWidgetsPlugins,
             InputDispatchPlugin,
             TabNavigationPlugin,
             FeathersPlugin,
-            // FpsOverlayPlugin {
-            //     config: FpsOverlayConfig {
-            //         text_config: TextFont {
-            //             // Here we define size of our overlay
-            //             font_size: 22.0,
-            //             // If we want, we can use a custom font
-            //             font: default(),
-            //             // We could also disable font smoothing,
-            //             font_smoothing: FontSmoothing::default(),
-            //             ..default()
-            //         },
-            //         // We can also change color of the overlay
-            //         text_color: palettes::css::GREEN.into(),
-            //         // We can also set the refresh interval for the FPS counter
-            //         refresh_interval: core::time::Duration::from_millis(10),
-            //         enabled: true,
-            //         frame_time_graph_config: FrameTimeGraphConfig {
-            //             enabled: true,
-            //             // The minimum acceptable fps
-            //             min_fps: 30.0,
-            //             // The target fps
-            //             target_fps: 144.0,
-            //         },
-            //     },
-            // },
+            FpsOverlayPlugin {
+                config: FpsOverlayConfig {
+                    text_config: TextFont {
+                        // Here we define size of our overlay
+                        font_size: 22.0,
+                        // If we want, we can use a custom font
+                        font: default(),
+                        // We could also disable font smoothing,
+                        font_smoothing: FontSmoothing::default(),
+                        ..default()
+                    },
+                    // We can also change color of the overlay
+                    text_color: palettes::css::GREEN.into(),
+                    // We can also set the refresh interval for the FPS counter
+                    refresh_interval: core::time::Duration::from_millis(10),
+                    enabled: true,
+                    frame_time_graph_config: FrameTimeGraphConfig {
+                        enabled: true,
+                        // The minimum acceptable fps
+                        min_fps: 30.0,
+                        // The target fps
+                        target_fps: 144.0,
+                    },
+                },
+            },
         ))
         .insert_resource(UiTheme(create_dark_theme()))
         .insert_resource(DebugPickingMode::Normal)
         .add_systems(Startup, setup)
-        .add_systems(Update, input_handler)
         .add_systems(Update, up_down)
         .add_systems(Update, draw_axes)
         .add_systems(Update, update_square_size_from_slider)
@@ -319,12 +341,14 @@ fn main() {
         .add_systems(Update, update_depth_of_field_from_sliders)
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
         .add_systems(Update, enable_gizmos)
-        // .add_systems(Update, enable_fps_overlay)
+        .add_systems(Update, enable_fps_overlay)
         .add_systems(Update, enable_vsync)
         .add_systems(Update, update_directional_lights_from_sliders)
         .add_systems(Update, update_point_lights_from_sliders)
         .add_systems(Update, set_ui_debug_options)
         .add_systems(Update, set_picking_debug)
+        .add_systems(Update, update_decal_from_sliders)
+        .add_systems(Update, update_decal_transform)
         .add_systems(
             Update,
             (
@@ -373,6 +397,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
+    mut decal_standard_materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
 ) {
     let checkerboard = CheckerboardSettings {
         rows: 4,
@@ -389,13 +414,11 @@ fn setup(
             clearcoat: 1.0,
             clearcoat_perceptual_roughness: 0.3,
             clearcoat_normal_texture: Some(asset_server.load_with_settings(
-                "textures/ScratchedGold-Normal.png",
+                "textures/ScratchedGold-Normal.png", // todo debug view this?
                 |settings: &mut ImageLoaderSettings| settings.is_srgb = false,
             )),
-            // base_color_texture: Some(asset_server.load("textures/ScratchedGold-Normal.png")),
             metallic: 0.9,
             perceptual_roughness: 0.1,
-            // base
             ..default()
         })),
         UpDown,
@@ -414,7 +437,9 @@ fn setup(
     commands
         .spawn((
             Camera3d::default(),
-            Msaa::Sample4,
+            // CameraController::default(),
+            Msaa::Off,
+            Fxaa::default(), // Supports both decals and WebGPU at the same time
             Hdr,
             Camera {
                 clear_color: ClearColorConfig::Custom(palettes::tailwind::PINK_600.into()),
@@ -454,41 +479,35 @@ fn setup(
         ))
         .id();
 
+    commands.spawn((
+        Name::new("Decal"),
+        ForwardDecal,
+        MeshMaterial3d(decal_standard_materials.add(ForwardDecalMaterial {
+            base: StandardMaterial {
+                base_color_texture: Some(asset_server.load_with_settings(
+                    "textures/decals/imperfection.png",
+                    |settings: &mut ImageLoaderSettings| {
+                        settings.sampler.get_or_init_descriptor().address_mode_u =
+                            bevy_image::ImageAddressMode::Repeat;
+                        settings.sampler.get_or_init_descriptor().address_mode_v =
+                            bevy_image::ImageAddressMode::Repeat;
+                    },
+                )),
+                alpha_mode: AlphaMode::Blend,
+                ..default()
+            },
+            extension: ForwardDecalMaterialExt {
+                depth_fade_factor: 1.0,
+            },
+        })),
+        Transform::from_scale(Vec3::splat(4.0)),
+    ));
+
     commands.spawn((PointLight::default(), camera_and_light_transform));
     commands.spawn((DirectionalLight::default(), camera_and_light_transform));
 
     let root = root_node(&mut commands, ui_camera, &scene_image);
     commands.spawn(root);
-}
-
-// System to receive input from the user,
-// check out examples/input/ for more examples about user input.
-fn input_handler(
-    keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut query: Query<&mut Transform, With<CustomUV>>,
-    time: Res<Time>,
-) {
-    if keyboard_input.just_pressed(KeyCode::Space) {}
-    if keyboard_input.pressed(KeyCode::KeyX) {
-        for mut transform in &mut query {
-            transform.rotate_x(time.delta_secs() / 1.2);
-        }
-    }
-    if keyboard_input.pressed(KeyCode::KeyY) {
-        for mut transform in &mut query {
-            transform.rotate_y(time.delta_secs() / 1.2);
-        }
-    }
-    if keyboard_input.pressed(KeyCode::KeyZ) {
-        for mut transform in &mut query {
-            transform.rotate_z(time.delta_secs() / 1.2);
-        }
-    }
-    if keyboard_input.pressed(KeyCode::KeyR) {
-        for mut transform in &mut query {
-            transform.look_to(Vec3::NEG_Z, Vec3::Y);
-        }
-    }
 }
 
 /// Create a checkerboard mesh with the specified number of rows and columns.
@@ -677,7 +696,7 @@ fn geometry_node() -> impl Bundle {
             slider(
                 SliderProps {
                     min: 2.0,
-                    value: 9.0,
+                    value: 11.0,
                     max: 20.0,
                     ..default()
                 },
@@ -690,7 +709,7 @@ fn geometry_node() -> impl Bundle {
             slider(
                 SliderProps {
                     min: 2.0,
-                    value: 16.0,
+                    value: 10.0,
                     max: 20.0,
                     ..default()
                 },
@@ -703,7 +722,7 @@ fn geometry_node() -> impl Bundle {
             slider(
                 SliderProps {
                     min: 5.0,
-                    value: 34.0,
+                    value: 78.0,
                     max: 100.0,
                     ..default()
                 },
@@ -901,8 +920,7 @@ fn material_node() -> impl Bundle {
             ),
             (
                 Text("Color".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
+                TextFont::from_font_size(UI_TEXT_SMALL)
             ),
             (
                 Node {
@@ -921,7 +939,7 @@ fn material_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 1.0,
+                            value: 0.88,
                             max: 1.0,
                             ..default()
                         },
@@ -934,7 +952,7 @@ fn material_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 1.0,
+                            value: 0.89,
                             max: 1.0,
                             ..default()
                         },
@@ -947,7 +965,7 @@ fn material_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 1.0,
+                            value: 0.91,
                             max: 1.0,
                             ..default()
                         },
@@ -955,6 +973,102 @@ fn material_node() -> impl Bundle {
                     ),
                 ]
             ),
+            // Decal
+            (
+                Text("Decal".to_owned()),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont::from_font_size(UI_TEXT_BIG)
+            ),
+            (
+                Text("Color".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: px(4.),
+                    ..default()
+                },
+                children![
+                    (
+                        Text("R".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.56,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderDecalColorR),
+                    ),
+                    (
+                        Text("G".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.58,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderDecalColorG),
+                    ),
+                    (
+                        Text("B".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.57,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderDecalColorB),
+                    ),
+                    slider(
+                        SliderProps {
+                            min: 0.0,
+                            value: 0.08,
+                            max: 1.0,
+                            ..default()
+                        },
+                        (SliderPrecision(2), SliderDecalColorA),
+                    ),
+                ]
+            ),
+            (
+                Text("Scale".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.1,
+                    value: 0.57,
+                    max: 10.0,
+                    ..default()
+                },
+                (SliderPrecision(2), SliderDecalScale),
+            ),
+            (
+                Text("Rotation (degrees)".to_owned()),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            slider(
+                SliderProps {
+                    min: 0.0,
+                    value: 16.0,
+                    max: 360.0,
+                    ..default()
+                },
+                (SliderPrecision(1), SliderDecalAngle),
+            )
         ],
     )
 }
@@ -983,7 +1097,7 @@ fn environment_node() -> impl Bundle {
             slider(
                 SliderProps {
                     min: 0.0,
-                    value: 5000.0,
+                    value: 7000.0,
                     max: 10000.0,
                     ..default()
                 },
@@ -996,7 +1110,7 @@ fn environment_node() -> impl Bundle {
             slider(
                 SliderProps {
                     min: 0.0,
-                    value: 2000.0,
+                    value: 300.0,
                     max: 10000.0,
                     ..default()
                 },
@@ -1276,7 +1390,7 @@ fn camera_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.5,
+                            value: 0.43,
                             max: 3.0,
                             ..default()
                         },
@@ -1289,7 +1403,7 @@ fn camera_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.1,
-                            value: 0.5,
+                            value: 0.81,
                             max: 3.0,
                             ..default()
                         },
@@ -1302,7 +1416,7 @@ fn camera_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.5,
+                            value: 0.01,
                             max: 3.0,
                             ..default()
                         },
@@ -1391,7 +1505,7 @@ fn camera_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.3,
-                            value: 1.0,
+                            value: 0.61,
                             max: 10.0,
                             ..default()
                         },
@@ -1405,7 +1519,7 @@ fn camera_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 5.0,
-                            value: 18.66,
+                            value: 10.18,
                             max: 50.0,
                             ..default()
                         },
@@ -1419,7 +1533,7 @@ fn camera_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.1,
-                            value: 1.0,
+                            value: 2.5,
                             max: 3.0,
                             ..default()
                         },
@@ -1872,13 +1986,13 @@ fn enable_gizmos(
     config.enabled = show_gizmos.is_some();
 }
 
-// fn enable_fps_overlay(
-//     mut config: ResMut<FpsOverlayConfig>,
-//     show_fps: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
-// ) {
-//     config.enabled = show_fps.is_some();
-//     config.frame_time_graph_config.enabled = show_fps.is_some();
-// }
+fn enable_fps_overlay(
+    mut config: ResMut<FpsOverlayConfig>,
+    show_fps: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
+) {
+    config.enabled = show_fps.is_some();
+    config.frame_time_graph_config.enabled = show_fps.is_some();
+}
 
 fn enable_vsync(
     mut window: Single<&mut Window, With<PrimaryWindow>>,
@@ -1954,4 +2068,52 @@ fn set_picking_debug(
     } else if radio_noisy.is_some() {
         *mode = DebugPickingMode::Noisy;
     }
+}
+
+fn update_decal_from_sliders(
+    slider_r: Single<&SliderValue, With<SliderDecalColorR>>,
+    slider_g: Single<&SliderValue, With<SliderDecalColorG>>,
+    slider_b: Single<&SliderValue, With<SliderDecalColorB>>,
+    slider_a: Single<&SliderValue, With<SliderDecalColorA>>,
+    slider_scale: Single<&SliderValue, With<SliderDecalScale>>,
+    slider_angle: Single<&SliderValue, With<SliderDecalAngle>>,
+    mut decal: Single<
+        (
+            &mut Transform,
+            &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
+        ),
+        With<ForwardDecal>,
+    >,
+    mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
+) {
+    let color = Color::srgb_from_array([slider_r.0, slider_g.0, slider_b.0]).with_alpha(slider_a.0);
+
+    let (_transform, material_handle) = decal.deref_mut();
+
+    if let Some(material) = materials.get_mut(&material_handle.clone()) {
+        material.base.base_color = color;
+        material.base.uv_transform = Affine2::from_scale_angle_translation(
+            Vec2::splat(slider_scale.0),
+            slider_angle.0.to_radians(),
+            Vec2::ONE,
+        )
+    }
+
+    // **transform = Transform::from_scale(Vec3::splat(slider_scale.0));
+}
+
+// Make the decal always cover the entire checkerboard
+fn update_decal_transform(
+    mut decal: Single<&mut Transform, (With<ForwardDecal>, Without<CheckerboardSettings>)>,
+    checkerboard: Single<&Transform, With<CheckerboardSettings>>,
+    settings: Res<CheckerboardSettings>,
+) {
+    **decal = Transform {
+        scale: Vec3::new(
+            settings.square_size * settings.cols as f32,
+            1.0,
+            settings.square_size * settings.rows as f32,
+        ),
+        ..**checkerboard
+    };
 }
