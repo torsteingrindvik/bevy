@@ -9,9 +9,7 @@
 //   - Color jittering (?)
 // - Try using world-space corner positions, display in viewport via gizmos
 // - "Settled" component: For all things with transforms, mark as settled when not moving for e.g. 3 frames
-// - Decals!
 // - Host online wasm
-// - MSAA control
 // - Another render target: Shows the scene from afar such that we can see gizmos for lights etc., maybe orthographic?
 // - Macro for creating marker component
 
@@ -37,6 +35,9 @@
 // which gives us a list of all combinations of settings to render.
 // This way we can plan out a large number of renders with different settings if we have a goal of e.g. 100k renders.
 
+#[path = "../helpers/camera_controller.rs"]
+mod camera_controller;
+
 use std::ops::{Deref, DerefMut};
 
 use bevy::anti_alias::fxaa::Fxaa;
@@ -54,7 +55,7 @@ use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::ui::Checked;
-use bevy::ui_widgets::{Activate, Callback, RadioButton, RadioGroup, Slider, UiWidgetsPlugins};
+use bevy::ui_widgets::{Activate, Callback, RadioGroup, Slider, UiWidgetsPlugins};
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
@@ -81,7 +82,7 @@ use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
 
-use crate::camera_controller::{CameraController, CameraControllerPlugin};
+use crate::camera_controller::CameraControllerPlugin;
 
 const UI_TEXT_SMALL: f32 = 12.0;
 const UI_TEXT_BIG: f32 = 16.0;
@@ -272,8 +273,21 @@ struct SliderDecalScale;
 #[derive(Component)]
 struct SliderDecalAngle;
 
-#[path = "../helpers/camera_controller.rs"]
-mod camera_controller;
+#[derive(Component)]
+struct RadioPickingDecalTextureFingerprints;
+
+#[derive(Component)]
+struct RadioPickingDecalTextureRaindrops;
+
+#[derive(Component)]
+struct RadioPickingDecalTextureChewingGum;
+
+#[derive(Debug, Resource)]
+struct Decals {
+    fingerprints: Handle<Image>,
+    raindrops: Handle<Image>,
+    chewing_gum: Handle<Image>,
+}
 
 fn main() {
     App::new()
@@ -330,7 +344,15 @@ fn main() {
         .add_systems(Update, draw_axes)
         .add_systems(Update, update_square_size_from_slider)
         .add_systems(Update, update_checkerboard_transform_from_settings)
-        .add_systems(Update, update_checkerboard_transform_from_sliders)
+        .add_systems(
+            Update,
+            (
+                update_checkerboard_transform_from_sliders,
+                update_decal_transform,
+            )
+                .chain()
+                .after(up_down),
+        )
         .add_systems(Update, update_checkerboard_color_from_sliders)
         .add_systems(Update, update_camera_transform_from_sliders)
         .add_systems(Update, update_camera_projection_from_sliders)
@@ -347,8 +369,8 @@ fn main() {
         .add_systems(Update, update_point_lights_from_sliders)
         .add_systems(Update, set_ui_debug_options)
         .add_systems(Update, set_picking_debug)
+        .add_systems(Update, set_decal_texture)
         .add_systems(Update, update_decal_from_sliders)
-        .add_systems(Update, update_decal_transform)
         .add_systems(
             Update,
             (
@@ -364,10 +386,10 @@ fn main() {
 }
 
 fn up_down(time: Res<Time>, mut query: Query<&mut Transform, With<UpDown>>) {
-    for mut transform in &mut query {
-        let new_y = (time.elapsed_secs().sin() + 1.0) / 2.0;
-        transform.translation.y = new_y * 0.2;
-    }
+    // for mut transform in &mut query {
+    //     let new_y = (time.elapsed_secs().sin() + 1.0) / 2.0;
+    //     transform.translation.y = new_y * 0.2;
+    // }
 }
 
 fn draw_axes(mut gizmos: Gizmos, query: Query<&Transform, With<ShowAxes>>) {
@@ -479,20 +501,30 @@ fn setup(
         ))
         .id();
 
+    let load_settings = |settings: &mut ImageLoaderSettings| {
+        settings.sampler.get_or_init_descriptor().address_mode_u =
+            bevy_image::ImageAddressMode::Repeat;
+        settings.sampler.get_or_init_descriptor().address_mode_v =
+            bevy_image::ImageAddressMode::Repeat;
+    };
+
+    let decals = Decals {
+        fingerprints: asset_server
+            .load_with_settings("textures/decals/imperfection.png", load_settings),
+        raindrops: asset_server.load_with_settings("textures/decals/raindrops.png", load_settings),
+        chewing_gum: asset_server
+            .load_with_settings("textures/decals/chewing_gum.png", load_settings),
+    };
+    let init_decal = decals.fingerprints.clone();
+
+    commands.insert_resource(decals);
+
     commands.spawn((
         Name::new("Decal"),
         ForwardDecal,
         MeshMaterial3d(decal_standard_materials.add(ForwardDecalMaterial {
             base: StandardMaterial {
-                base_color_texture: Some(asset_server.load_with_settings(
-                    "textures/decals/imperfection.png",
-                    |settings: &mut ImageLoaderSettings| {
-                        settings.sampler.get_or_init_descriptor().address_mode_u =
-                            bevy_image::ImageAddressMode::Repeat;
-                        settings.sampler.get_or_init_descriptor().address_mode_v =
-                            bevy_image::ImageAddressMode::Repeat;
-                    },
-                )),
+                base_color_texture: Some(init_decal),
                 alpha_mode: AlphaMode::Blend,
                 ..default()
             },
@@ -849,7 +881,22 @@ fn geometry_node() -> impl Bundle {
     )
 }
 
-fn material_node() -> impl Bundle {
+fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
+    #[derive(Component)]
+    struct LocalRadio;
+
+    let radio_check = commands.register_system(
+        |ent: In<Activate>, q_radio: Query<Entity, With<LocalRadio>>, mut commands: Commands| {
+            for radio in q_radio.iter() {
+                if radio == ent.0 .0 {
+                    commands.entity(radio).insert(Checked);
+                } else {
+                    commands.entity(radio).remove::<Checked>();
+                }
+            }
+        },
+    );
+
     (
         Node {
             display: Display::Flex,
@@ -980,6 +1027,37 @@ fn material_node() -> impl Bundle {
                 TextFont::from_font_size(UI_TEXT_BIG)
             ),
             (
+                Text("Texture".to_owned()),
+                TextLayout::new_with_justify(Justify::Left),
+                TextFont::from_font_size(UI_TEXT_SMALL)
+            ),
+            // Texture
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    column_gap: px(4),
+                    ..default()
+                },
+                RadioGroup {
+                    on_change: Callback::System(radio_check),
+                },
+                children![
+                    radio(
+                        (Checked, LocalRadio, RadioPickingDecalTextureFingerprints),
+                        Spawn((Text::new("Fingerprints"), ThemedText))
+                    ),
+                    radio(
+                        (LocalRadio, RadioPickingDecalTextureRaindrops),
+                        Spawn((Text::new("Raindrops"), ThemedText))
+                    ),
+                    radio(
+                        (LocalRadio, RadioPickingDecalTextureChewingGum),
+                        Spawn((Text::new("Chewing Gum"), ThemedText))
+                    ),
+                ]
+            ),
+            (
                 Text("Color".to_owned()),
                 TextFont::from_font_size(UI_TEXT_SMALL)
             ),
@@ -1000,7 +1078,7 @@ fn material_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.56,
+                            value: 0.28,
                             max: 1.0,
                             ..default()
                         },
@@ -1013,7 +1091,7 @@ fn material_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.58,
+                            value: 0.23,
                             max: 1.0,
                             ..default()
                         },
@@ -1026,7 +1104,7 @@ fn material_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.57,
+                            value: 0.11,
                             max: 1.0,
                             ..default()
                         },
@@ -1035,7 +1113,7 @@ fn material_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.08,
+                            value: 0.57,
                             max: 1.0,
                             ..default()
                         },
@@ -1050,7 +1128,7 @@ fn material_node() -> impl Bundle {
             slider(
                 SliderProps {
                     min: 0.1,
-                    value: 0.57,
+                    value: 1.86,
                     max: 10.0,
                     ..default()
                 },
@@ -1063,7 +1141,7 @@ fn material_node() -> impl Bundle {
             slider(
                 SliderProps {
                     min: 0.0,
-                    value: 16.0,
+                    value: 86.0,
                     max: 360.0,
                     ..default()
                 },
@@ -1546,8 +1624,11 @@ fn camera_node() -> impl Bundle {
 }
 
 fn debug_node(commands: &mut Commands) -> impl Bundle {
+    #[derive(Component)]
+    struct LocalRadio;
+
     let radio_check = commands.register_system(
-        |ent: In<Activate>, q_radio: Query<Entity, With<RadioButton>>, mut commands: Commands| {
+        |ent: In<Activate>, q_radio: Query<Entity, With<LocalRadio>>, mut commands: Commands| {
             for radio in q_radio.iter() {
                 if radio == ent.0 .0 {
                     commands.entity(radio).insert(Checked);
@@ -1612,15 +1693,15 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                         TextFont::from_font_size(UI_TEXT_SMALL)
                     ),
                     radio(
-                        (Checked, RadioPickingDebugDisabled),
+                        (Checked, RadioPickingDebugDisabled, LocalRadio),
                         Spawn((Text::new("Disabled"), ThemedText))
                     ),
                     radio(
-                        RadioPickingDebugNormal,
+                        (RadioPickingDebugNormal, LocalRadio),
                         Spawn((Text::new("Normal"), ThemedText))
                     ),
                     radio(
-                        RadioPickingDebugNoisy,
+                        (RadioPickingDebugNoisy, LocalRadio),
                         Spawn((Text::new("Noisy"), ThemedText))
                     ),
                 ]
@@ -1662,6 +1743,12 @@ fn root_node(
     scene_image: &Handle<Image>,
 ) -> impl Bundle {
     let tabs = tabs_node(commands);
+    let geometry = geometry_node();
+    let material = material_node(commands);
+    let environment = environment_node();
+    let light = light_node();
+    let camera = camera_node();
+    let debug = debug_node(commands);
 
     (
         Node {
@@ -1689,15 +1776,7 @@ fn root_node(
                     max_width: percent(40),
                     ..default()
                 },
-                children![
-                    tabs,
-                    geometry_node(),
-                    material_node(),
-                    environment_node(),
-                    light_node(),
-                    camera_node(),
-                    debug_node(commands)
-                ]
+                children![tabs, geometry, material, environment, light, camera, debug]
             ),
             (
                 ImageNode::new(scene_image.clone()),
@@ -2098,8 +2177,6 @@ fn update_decal_from_sliders(
             Vec2::ONE,
         )
     }
-
-    // **transform = Transform::from_scale(Vec3::splat(slider_scale.0));
 }
 
 // Make the decal always cover the entire checkerboard
@@ -2116,4 +2193,23 @@ fn update_decal_transform(
         ),
         ..**checkerboard
     };
+}
+
+fn set_decal_texture(
+    radio_fingerprints: Option<Single<&RadioPickingDecalTextureFingerprints, With<Checked>>>,
+    radio_raindrops: Option<Single<&RadioPickingDecalTextureRaindrops, With<Checked>>>,
+    radio_chewing_gum: Option<Single<&RadioPickingDecalTextureChewingGum, With<Checked>>>,
+    decal: Single<&MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>, With<ForwardDecal>>,
+    decals: Res<Decals>,
+    mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
+) {
+    if let Some(material) = materials.get_mut(&decal.clone()) {
+        if radio_fingerprints.is_some() {
+            material.base.base_color_texture = Some(decals.fingerprints.clone());
+        } else if radio_raindrops.is_some() {
+            material.base.base_color_texture = Some(decals.raindrops.clone());
+        } else if radio_chewing_gum.is_some() {
+            material.base.base_color_texture = Some(decals.chewing_gum.clone());
+        }
+    }
 }
