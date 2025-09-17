@@ -1,4 +1,4 @@
-//! Example that generates a checkerboard mesh procedurally
+//! The checkmate!
 
 // TODO:
 // - UVs are not working with clearcoat normal map, investigate
@@ -8,10 +8,22 @@
 //   - Solarisation (?)
 //   - Color jittering (?)
 // - Try using world-space corner positions, display in viewport via gizmos
+//  - Gizmos are not it. 2d gizmos are not 2d.
 // - "Settled" component: For all things with transforms, mark as settled when not moving for e.g. 3 frames
 // - Host online wasm
 // - Another render target: Shows the scene from afar such that we can see gizmos for lights etc., maybe orthographic?
 // - Macro for creating marker component
+// - More HDRIs, perhaps https://github.com/bytestring-net/bevy_skybox_cli
+// - Render resolution
+// - Some way to make a key of all settings such that we can go from image name to key and recreate images?
+// - Intrinsics with distortion model
+//  - Can custom projections help?
+//  - How do we ensure our perfect information is still correct?
+// - Hover zoom thing
+// - Axes checkmark
+// - Camera distance to checkerboard center text display
+// - Disabling depth of field
+//  - Also maybe file a bug report of how it interacts with unlit spheres?
 
 // Scratchpad:
 //
@@ -34,10 +46,14 @@
 // Then we can generate the cartesian product of all these iterators with the number of steps defined,
 // which gives us a list of all combinations of settings to render.
 // This way we can plan out a large number of renders with different settings if we have a goal of e.g. 100k renders.
+//
+// Also we want to be able to plan this out in a menu step-by-step, as well as preview running through it without doing
+// any save to disk
 
 #[path = "../helpers/camera_controller.rs"]
 mod camera_controller;
 
+use std::iter::zip;
 use std::ops::{Deref, DerefMut};
 
 use bevy::anti_alias::fxaa::Fxaa;
@@ -82,15 +98,13 @@ use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
 
+// use crate::camera_controller::CameraController;
 use crate::camera_controller::CameraControllerPlugin;
 
 const UI_TEXT_SMALL: f32 = 12.0;
 const UI_TEXT_BIG: f32 = 16.0;
 
 const UI_ROW_GAP_PER_TAB: f32 = 8.0;
-
-#[derive(Component)]
-struct UpDown;
 
 #[derive(Component)]
 struct ShowAxes;
@@ -282,11 +296,23 @@ struct RadioPickingDecalTextureRaindrops;
 #[derive(Component)]
 struct RadioPickingDecalTextureChewingGum;
 
+#[derive(Component)]
+struct CheckboxShowCheckerboardCornerGizmos;
+
+#[derive(Component)]
+struct CheckboxShowCheckerboardCornerViewportSpheres; // Instead of in world
+
 #[derive(Debug, Resource)]
 struct Decals {
     fingerprints: Handle<Image>,
     raindrops: Handle<Image>,
     chewing_gum: Handle<Image>,
+}
+
+#[derive(Debug, Resource)]
+struct UnlitViewportSpheresParent {
+    parent: Entity,
+    mesh: Handle<Mesh>,
 }
 
 fn main() {
@@ -340,22 +366,21 @@ fn main() {
         .insert_resource(UiTheme(create_dark_theme()))
         .insert_resource(DebugPickingMode::Normal)
         .add_systems(Startup, setup)
-        .add_systems(Update, up_down)
         .add_systems(Update, draw_axes)
-        .add_systems(Update, update_square_size_from_slider)
-        .add_systems(Update, update_checkerboard_transform_from_settings)
         .add_systems(
             Update,
             (
+                update_camera_transform_from_sliders,
+                update_camera_projection_from_sliders,
+                update_square_size_from_slider,
                 update_checkerboard_transform_from_sliders,
+                update_checkerboard_transform_from_settings,
                 update_decal_transform,
+                unlit_corner_spheres,
             )
-                .chain()
-                .after(up_down),
+                .chain(),
         )
         .add_systems(Update, update_checkerboard_color_from_sliders)
-        .add_systems(Update, update_camera_transform_from_sliders)
-        .add_systems(Update, update_camera_projection_from_sliders)
         .add_systems(Update, update_slider_height)
         .add_systems(Update, update_slider_font_size)
         .add_systems(Update, update_checkerboard_material_from_sliders)
@@ -377,19 +402,11 @@ fn main() {
                 update_rows_cols_from_sliders,
                 generate_checkerboard,
                 maintain_corners_as_checkerboard_children,
-                corners_gizmos,
             )
                 .chain(),
         )
         .add_systems(Last, corners_gizmos)
         .run();
-}
-
-fn up_down(time: Res<Time>, mut query: Query<&mut Transform, With<UpDown>>) {
-    // for mut transform in &mut query {
-    //     let new_y = (time.elapsed_secs().sin() + 1.0) / 2.0;
-    //     transform.translation.y = new_y * 0.2;
-    // }
 }
 
 fn draw_axes(mut gizmos: Gizmos, query: Query<&Transform, With<ShowAxes>>) {
@@ -443,14 +460,13 @@ fn setup(
             perceptual_roughness: 0.1,
             ..default()
         })),
-        UpDown,
         ShowAxes,
         checkerboard,
     ));
 
     // Transform for the camera and lighting, looking at (0,0,0) (the position of the mesh).
     let camera_and_light_transform =
-        Transform::from_xyz(3.8, 3.8, 1.8).looking_at(Vec3::ZERO, Vec3::Y);
+        Transform::from_xyz(0.8, 0.8, 0.8).looking_at(Vec3::ZERO, Vec3::Y);
 
     // let scene_image = image_render_target(&asset_server);
     let scene_image = image_render_target(&mut images);
@@ -540,6 +556,15 @@ fn setup(
 
     let root = root_node(&mut commands, ui_camera, &scene_image);
     commands.spawn(root);
+
+    let unlit_parent = commands
+        .spawn((Transform::default(), Visibility::default()))
+        .id();
+
+    commands.insert_resource(UnlitViewportSpheresParent {
+        parent: unlit_parent,
+        mesh: meshes.add(Sphere::new(0.0004)),
+    });
 }
 
 /// Create a checkerboard mesh with the specified number of rows and columns.
@@ -1660,7 +1685,24 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                     on_change: Callback::Ignore,
                 },
                 (Checked, CheckboxShowGizmos),
-                Spawn((Text::new("Show gizmos"), ThemedText))
+                Spawn((Text::new("Gizmos enabled"), ThemedText))
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                CheckboxShowCheckerboardCornerGizmos,
+                Spawn((Text::new("Checkerboard corner world gizmos"), ThemedText))
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: Callback::Ignore,
+                },
+                CheckboxShowCheckerboardCornerViewportSpheres,
+                Spawn((
+                    Text::new("Checkerboard corner viewport spheres"),
+                    ThemedText
+                ))
             ),
             checkbox(
                 CheckboxProps {
@@ -1998,6 +2040,8 @@ fn update_node_visibility_from_ui_tab_variant(
 
 fn maintain_corners_as_checkerboard_children(
     mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    unlit_parent: Res<UnlitViewportSpheresParent>,
     checkerboard_res: Res<CheckerboardSettings>,
     checkerboards: Query<(Entity, &CheckerboardSettings)>,
 ) {
@@ -2009,35 +2053,74 @@ fn maintain_corners_as_checkerboard_children(
 
             // Start over
             commands.entity(checkerboard).despawn_children();
+            commands.entity(unlit_parent.parent).despawn_children();
 
-            let mut children = vec![];
+            let mut checkerboard_children = vec![];
+            let mut unlit_children = vec![];
 
             let half = Vec3::new(cols as f32, 0.0, rows as f32) / 2.0;
+
+            let green = palettes::basic::GREEN;
+            let red = palettes::basic::RED;
+
+            let num_corners = (rows - 1) * (cols - 1);
 
             let mut id = 0;
             for row in 1..rows {
                 for col in 1..cols {
                     let position = Vec3::new(col as f32, 0.0, row as f32) - half;
 
-                    children.push(
+                    checkerboard_children.push(
                         commands
                             .spawn((Transform::from_translation(position), CornerId(id)))
                             .id(),
                     );
+
+                    let color = green.mix(&red, id as f32 / num_corners as f32);
+
+                    unlit_children.push(
+                        commands
+                            .spawn((
+                                Transform::default(),
+                                CornerId(id),
+                                Mesh3d(unlit_parent.mesh.clone()),
+                                MeshMaterial3d(materials.add(StandardMaterial {
+                                    base_color: color.into(),
+                                    unlit: true,
+                                    cull_mode: None,
+                                    depth_bias: 1.0,
+                                    double_sided: true,
+                                    ..default()
+                                })),
+                            ))
+                            .id(),
+                    );
+
                     id += 1;
                 }
             }
 
-            commands.entity(checkerboard).add_children(&children);
+            commands
+                .entity(checkerboard)
+                .add_children(&checkerboard_children);
+
+            commands
+                .entity(unlit_parent.parent)
+                .add_children(&unlit_children);
         }
     }
 }
 
 fn corners_gizmos(
     mut gizmos: Gizmos,
+    enabled: Option<Single<&CheckboxShowCheckerboardCornerGizmos, With<Checked>>>,
     checkerboards: Query<(&Children, &Transform), With<CheckerboardSettings>>,
     corners: Query<(&GlobalTransform, &CornerId)>,
 ) {
+    if enabled.is_none() {
+        return;
+    }
+
     for (checkerboard_children, checkerboard_transform) in &checkerboards {
         let num_corners = checkerboard_children.len();
 
@@ -2210,6 +2293,65 @@ fn set_decal_texture(
             material.base.base_color_texture = Some(decals.raindrops.clone());
         } else if radio_chewing_gum.is_some() {
             material.base.base_color_texture = Some(decals.chewing_gum.clone());
+        }
+    }
+}
+
+fn unlit_corner_spheres(
+    camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
+    enabled: Option<Single<&CheckboxShowCheckerboardCornerViewportSpheres, With<Checked>>>,
+    checkerboards: Query<&Children, With<CheckerboardSettings>>,
+    mut corners: Query<(&GlobalTransform, &CornerId), Without<Gizmo>>,
+    mut unlits: Query<(&mut Transform, &mut Visibility, &CornerId), With<Mesh3d>>,
+) {
+    for checkerboard_children in &checkerboards {
+        let num_corners = checkerboard_children.len();
+
+        let green = palettes::basic::GREEN;
+        let red = palettes::basic::RED;
+
+        for (child, (mut unlit_transform, mut unlit_visibility, _gizmo_id)) in
+            zip(checkerboard_children.iter(), unlits.iter_mut())
+        {
+            *unlit_visibility = if enabled.is_some() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+
+            if let Ok((corner_global_transform, corner_id)) = corners.get_mut(child) {
+                let _color = green.mix(&red, corner_id.0 as f32 / num_corners as f32);
+
+                let (camera, camera_global_transform) = *camera;
+
+                let corner_world_pos = corner_global_transform.translation();
+
+                let Ok(viewport_coordinate) =
+                    camera.world_to_viewport(camera_global_transform, corner_world_pos)
+                else {
+                    continue;
+                };
+
+                let ray_at_near_plane = camera
+                    .viewport_to_world(camera_global_transform, viewport_coordinate)
+                    .expect("unsure?")
+                    .origin;
+
+                let Transform {
+                    translation,
+                    rotation,
+                    scale: _,
+                } = Transform::from_translation(ray_at_near_plane).looking_to(
+                    camera_global_transform.forward(),
+                    camera_global_transform.up(),
+                );
+
+                let dist = ray_at_near_plane.distance(camera_global_transform.translation());
+
+                unlit_transform.translation = translation;
+                unlit_transform.rotation = rotation;
+                unlit_transform.scale = Vec3::splat(0.15 / dist);
+            }
         }
     }
 }
