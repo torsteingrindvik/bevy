@@ -22,8 +22,6 @@
 // - Hover zoom thing
 // - Axes checkmark
 // - Camera distance to checkerboard center text display
-// - Disabling depth of field
-//  - Also maybe file a bug report of how it interacts with unlit spheres?
 
 // Scratchpad:
 //
@@ -71,7 +69,7 @@ use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::ui::Checked;
-use bevy::ui_widgets::{Activate, Callback, RadioGroup, Slider, UiWidgetsPlugins};
+use bevy::ui_widgets::{Activate, Callback, RadioGroup, Slider, UiWidgetsPlugins, ValueChange};
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
@@ -430,6 +428,13 @@ fn image_render_target(images: &mut Assets<Image>) -> Handle<Image> {
     images.add(image)
 }
 
+fn camera_depth_of_field() -> impl Bundle {
+    DepthOfField {
+        mode: DepthOfFieldMode::Bokeh,
+        ..default()
+    }
+}
+
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -488,11 +493,7 @@ fn setup(
             camera_and_light_transform,
             Tonemapping::AcesFitted,
             Bloom::NATURAL,
-            DepthOfField {
-                mode: DepthOfFieldMode::Bokeh,
-                focal_distance: 1.0,
-                ..default()
-            },
+            camera_depth_of_field(),
         ))
         .insert(Skybox {
             brightness: 5000.0,
@@ -1459,7 +1460,25 @@ fn light_node() -> impl Bundle {
     )
 }
 
-fn camera_node() -> impl Bundle {
+fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
+    let checkies = commands.register_system(
+        |change: In<ValueChange<bool>>,
+         camera: Single<Entity, (With<Camera>, With<Camera3d>)>,
+         mut commands: Commands| {
+            info!("Depth of field to {}", change.value);
+
+            let checkbox = change.source;
+
+            if change.value {
+                commands.entity(checkbox).insert(Checked);
+                commands.entity(*camera).insert(camera_depth_of_field());
+            } else {
+                commands.entity(checkbox).remove::<Checked>();
+                commands.entity(*camera).remove::<DepthOfField>();
+            }
+        },
+    );
+
     (
         Node {
             display: Display::Flex,
@@ -1599,6 +1618,13 @@ fn camera_node() -> impl Bundle {
                         Text("Depth of Field".to_owned()),
                         TextLayout::new_with_justify(Justify::Center),
                         TextFont::from_font_size(UI_TEXT_BIG)
+                    ),
+                    checkbox(
+                        CheckboxProps {
+                            on_change: Callback::System(checkies),
+                        },
+                        (Checked, CheckboxShowGizmos),
+                        Spawn((Text::new("Enabled"), ThemedText))
                     ),
                     // Focal distance node
                     (
@@ -1789,7 +1815,7 @@ fn root_node(
     let material = material_node(commands);
     let environment = environment_node();
     let light = light_node();
-    let camera = camera_node();
+    let camera = camera_node(commands);
     let debug = debug_node(commands);
 
     (
@@ -2004,13 +2030,11 @@ fn update_depth_of_field_from_sliders(
     slider_focal_distance: Single<&SliderValue, With<SliderFocalDistance>>,
     slider_sensor_height: Single<&SliderValue, With<SliderSensorHeight>>,
     slider_f_stops: Single<&SliderValue, With<SliderFStops>>,
-    mut q_dof: Query<&mut DepthOfField>,
+    mut dof: Single<&mut DepthOfField>,
 ) {
-    for mut dof in &mut q_dof {
-        dof.focal_distance = slider_focal_distance.0;
-        dof.sensor_height = slider_sensor_height.0 * 1e-3; // mm to meters
-        dof.aperture_f_stops = slider_f_stops.0;
-    }
+    dof.focal_distance = slider_focal_distance.0;
+    dof.sensor_height = slider_sensor_height.0 * 1e-3; // mm to meters
+    dof.aperture_f_stops = slider_f_stops.0;
 }
 
 fn update_node_visibility_from_ui_tab_variant(
@@ -2142,6 +2166,7 @@ fn corners_gizmos(
 
 fn enable_gizmos(
     mut gizmos: ResMut<GizmoConfigStore>,
+    // Oh this is very broken, the "false" here is so wrong?
     show_gizmos: Option<Single<&CheckboxShowGizmos, With<Checked>>>,
 ) {
     let (config, _) = gizmos.config_mut::<DefaultGizmoConfigGroup>();
