@@ -52,7 +52,7 @@
 mod camera_controller;
 
 use std::iter::zip;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::core_pipeline::prepass::DepthPrepass;
@@ -69,7 +69,9 @@ use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::ui::Checked;
-use bevy::ui_widgets::{Activate, Callback, RadioGroup, Slider, UiWidgetsPlugins, ValueChange};
+use bevy::ui_widgets::{
+    Activate, Callback, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
+};
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
@@ -108,15 +110,6 @@ const UI_ROW_GAP_PER_TAB: f32 = 8.0;
 struct ShowAxes;
 
 #[derive(Component)]
-struct SliderCheckerboardRows;
-
-#[derive(Component)]
-struct SliderCheckerboardCols;
-
-#[derive(Component)]
-struct SliderCheckerboardSquareSizeMillimeters;
-
-#[derive(Component)]
 struct SliderCameraX;
 
 #[derive(Component)]
@@ -124,18 +117,6 @@ struct SliderCameraY;
 
 #[derive(Component)]
 struct SliderCameraZ;
-
-#[derive(Component)]
-struct SliderMetallic;
-
-#[derive(Component)]
-struct SliderRoughness;
-
-#[derive(Component)]
-struct SliderClearcoat;
-
-#[derive(Component)]
-struct SliderClearcoatRoughness;
 
 #[derive(Component)]
 struct SliderSkyboxBrightness;
@@ -162,15 +143,6 @@ struct SliderCameraAspectRatioNumerator;
 struct SliderCameraAspectRatioDenominator;
 
 #[derive(Component)]
-struct SliderColorR;
-
-#[derive(Component)]
-struct SliderColorG;
-
-#[derive(Component)]
-struct SliderColorB;
-
-#[derive(Component)]
 struct SliderCheckerboardX;
 
 #[derive(Component)]
@@ -187,15 +159,6 @@ struct SliderCheckerboardRotY;
 
 #[derive(Component)]
 struct SliderCheckerboardRotZ;
-
-#[derive(Component)]
-struct CheckboxShowGizmos;
-
-#[derive(Component)]
-struct CheckboxShowFpsOverlay;
-
-#[derive(Component)]
-struct CheckboxUseVsync;
 
 #[derive(Component)]
 struct SliderLightDirectionX;
@@ -268,33 +231,6 @@ enum UiTabVariant {
 }
 
 #[derive(Component)]
-struct SliderDecalColorR;
-
-#[derive(Component)]
-struct SliderDecalColorG;
-
-#[derive(Component)]
-struct SliderDecalColorB;
-
-#[derive(Component)]
-struct SliderDecalColorA;
-
-#[derive(Component)]
-struct SliderDecalScale;
-
-#[derive(Component)]
-struct SliderDecalAngle;
-
-#[derive(Component)]
-struct RadioPickingDecalTextureFingerprints;
-
-#[derive(Component)]
-struct RadioPickingDecalTextureRaindrops;
-
-#[derive(Component)]
-struct RadioPickingDecalTextureChewingGum;
-
-#[derive(Component)]
 struct CheckboxShowCheckerboardCornerGizmos;
 
 #[derive(Component)]
@@ -305,6 +241,13 @@ struct Decals {
     fingerprints: Handle<Image>,
     raindrops: Handle<Image>,
     chewing_gum: Handle<Image>,
+}
+
+#[derive(Component)]
+enum DecalTexture {
+    Fingerprints,
+    Raindrops,
+    ChewingGum,
 }
 
 #[derive(Debug, Resource)]
@@ -350,13 +293,13 @@ fn main() {
                     text_color: palettes::css::GREEN.into(),
                     // We can also set the refresh interval for the FPS counter
                     refresh_interval: core::time::Duration::from_millis(10),
-                    enabled: true,
+                    enabled: false,
                     frame_time_graph_config: FrameTimeGraphConfig {
-                        enabled: true,
+                        enabled: false,
                         // The minimum acceptable fps
-                        min_fps: 30.0,
+                        min_fps: 100.0,
                         // The target fps
-                        target_fps: 144.0,
+                        target_fps: 400.0,
                     },
                 },
             },
@@ -370,7 +313,6 @@ fn main() {
             (
                 update_camera_transform_from_sliders,
                 update_camera_projection_from_sliders,
-                update_square_size_from_slider,
                 update_checkerboard_transform_from_sliders,
                 update_checkerboard_transform_from_settings,
                 update_decal_transform,
@@ -378,26 +320,18 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, update_checkerboard_color_from_sliders)
         .add_systems(Update, update_slider_height)
         .add_systems(Update, update_slider_font_size)
-        .add_systems(Update, update_checkerboard_material_from_sliders)
         .add_systems(Update, update_environment_from_sliders)
         .add_systems(Update, update_depth_of_field_from_sliders)
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
-        .add_systems(Update, enable_gizmos)
-        .add_systems(Update, enable_fps_overlay)
-        .add_systems(Update, enable_vsync)
         .add_systems(Update, update_directional_lights_from_sliders)
         .add_systems(Update, update_point_lights_from_sliders)
         .add_systems(Update, set_ui_debug_options)
         .add_systems(Update, set_picking_debug)
-        .add_systems(Update, set_decal_texture)
-        .add_systems(Update, update_decal_from_sliders)
         .add_systems(
             Update,
             (
-                update_rows_cols_from_sliders,
                 generate_checkerboard,
                 maintain_corners_as_checkerboard_children,
             )
@@ -444,9 +378,9 @@ fn setup(
     mut decal_standard_materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
 ) {
     let checkerboard = CheckerboardSettings {
-        rows: 4,
-        cols: 3,
-        square_size: 15e-3, // 15mm
+        rows: 11,
+        cols: 10,
+        square_size: 78e-3, // 78mm
     };
     let checkboard_handle: Handle<Mesh> = meshes.add(create_checkerboard(checkerboard));
 
@@ -729,7 +663,24 @@ fn tabs_node(commands: &mut Commands) -> impl Bundle + use<> {
     )
 }
 
-fn geometry_node() -> impl Bundle {
+fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
+    fn use_transform(
+        commands: &mut Commands,
+        use_with_new_value: impl Fn(&mut Transform, f32) + Send + Sync + 'static,
+    ) -> Callback<In<ValueChange<f32>>> {
+        Callback::System(commands.register_system(
+        move |change: In<ValueChange<f32>>,
+              mut commands: Commands,
+              mut checkerboard: Single<&mut Transform, With<CheckerboardSettings>>| {
+            commands
+                .entity(change.source)
+                .insert(SliderValue(change.value));
+
+            use_with_new_value(&mut checkerboard, change.value);
+        },
+    ))
+    }
+
     // Checkerboard settings node
     (
         Node {
@@ -756,9 +707,18 @@ fn geometry_node() -> impl Bundle {
                     min: 2.0,
                     value: 11.0,
                     max: 20.0,
-                    ..default()
+                    on_change: Callback::System(commands.register_system(
+                        |change: In<ValueChange<f32>>,
+                         mut commands: Commands,
+                         mut settings: ResMut<CheckerboardSettings>| {
+                            commands
+                                .entity(change.source)
+                                .insert(SliderValue(change.value));
+                            settings.rows = change.value as _;
+                        }
+                    ))
                 },
-                (SliderPrecision(0), SliderCheckerboardRows),
+                SliderPrecision(0),
             ),
             (
                 Text("Cols".to_owned()),
@@ -769,9 +729,18 @@ fn geometry_node() -> impl Bundle {
                     min: 2.0,
                     value: 10.0,
                     max: 20.0,
-                    ..default()
+                    on_change: Callback::System(commands.register_system(
+                        |change: In<ValueChange<f32>>,
+                         mut commands: Commands,
+                         mut settings: ResMut<CheckerboardSettings>| {
+                            commands
+                                .entity(change.source)
+                                .insert(SliderValue(change.value));
+                            settings.cols = change.value as _;
+                        }
+                    ))
                 },
-                (SliderPrecision(0), SliderCheckerboardCols),
+                SliderPrecision(0),
             ),
             (
                 Text("Square Size (mm)".to_owned()),
@@ -782,9 +751,19 @@ fn geometry_node() -> impl Bundle {
                     min: 5.0,
                     value: 78.0,
                     max: 100.0,
-                    ..default()
+
+                    on_change: Callback::System(commands.register_system(
+                        |change: In<ValueChange<f32>>,
+                         mut commands: Commands,
+                         mut settings: ResMut<CheckerboardSettings>| {
+                            commands
+                                .entity(change.source)
+                                .insert(SliderValue(change.value));
+                            settings.square_size = change.value * 1e-3; // convert from mm
+                        }
+                    ))
                 },
-                (SliderPrecision(0), SliderCheckerboardSquareSizeMillimeters),
+                SliderPrecision(0),
             ),
             (
                 Text("Translation".to_owned()),
@@ -810,9 +789,9 @@ fn geometry_node() -> impl Bundle {
                             min: -2.0,
                             value: 0.0,
                             max: 2.0,
-                            ..default()
+                            on_change: use_transform(commands, |t, value| t.translation.x = value),
                         },
-                        (SliderPrecision(2), SliderCheckerboardX),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Y".to_owned()),
@@ -823,9 +802,9 @@ fn geometry_node() -> impl Bundle {
                             min: -2.0,
                             value: 0.0,
                             max: 2.0,
-                            ..default()
+                            on_change: use_transform(commands, |t, value| t.translation.y = value),
                         },
-                        (SliderPrecision(2), SliderCheckerboardY),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Z".to_owned()),
@@ -836,9 +815,9 @@ fn geometry_node() -> impl Bundle {
                             min: -2.0,
                             value: 0.0,
                             max: 2.0,
-                            ..default()
+                            on_change: use_transform(commands, |t, value| t.translation.z = value),
                         },
-                        (SliderPrecision(2), SliderCheckerboardZ),
+                        SliderPrecision(2),
                     ),
                 ]
             ),
@@ -871,9 +850,13 @@ fn geometry_node() -> impl Bundle {
                             min: -90.0,
                             value: 0.0,
                             max: 90.0,
+                            on_change: use_transform(commands, |t, x| {
+                                let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                                t.rotation = Quat::from_euler(EulerRot::XYZEx, x.to_radians(), y, z)
+                            }),
                             ..default()
                         },
-                        (SliderPrecision(2), SliderCheckerboardRotX),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Y".to_owned()),
@@ -884,9 +867,12 @@ fn geometry_node() -> impl Bundle {
                             min: -90.0,
                             value: 0.0,
                             max: 90.0,
-                            ..default()
+                            on_change: use_transform(commands, |t, y| {
+                                let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                                t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y.to_radians(), z)
+                            }),
                         },
-                        (SliderPrecision(2), SliderCheckerboardRotY),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Z".to_owned()),
@@ -897,9 +883,12 @@ fn geometry_node() -> impl Bundle {
                             min: -90.0,
                             value: 0.0,
                             max: 90.0,
-                            ..default()
+                            on_change: use_transform(commands, |t, z| {
+                                let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
+                                t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, z.to_radians())
+                            }),
                         },
-                        (SliderPrecision(2), SliderCheckerboardRotZ),
+                        SliderPrecision(2),
                     )
                 ]
             )
@@ -908,17 +897,54 @@ fn geometry_node() -> impl Bundle {
 }
 
 fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
-    #[derive(Component)]
-    struct LocalRadio;
+    fn use_material<M: Asset + Material, C: Component>(
+        commands: &mut Commands,
+        use_with_new_value: impl Fn(&mut M, f32) + Send + Sync + 'static,
+    ) -> Callback<In<ValueChange<f32>>> {
+        Callback::System(commands.register_system(
+            move |change: In<ValueChange<f32>>,
+                  mut commands: Commands,
+                  mut materials: ResMut<Assets<M>>,
+                  material: Single<&mut MeshMaterial3d<M>, With<C>>| {
+                commands
+                    .entity(change.source)
+                    .insert(SliderValue(change.value));
+
+                let handle = material.0.clone();
+                let mut material = materials.get_mut(&handle).unwrap();
+
+                use_with_new_value(&mut material, change.value);
+            },
+        ))
+    }
 
     let radio_check = commands.register_system(
-        |ent: In<Activate>, q_radio: Query<Entity, With<LocalRadio>>, mut commands: Commands| {
-            for radio in q_radio.iter() {
-                if radio == ent.0 .0 {
-                    commands.entity(radio).insert(Checked);
-                } else {
-                    commands.entity(radio).remove::<Checked>();
-                }
+        |ent: In<Activate>,
+         child: Query<(Option<&ChildOf>, Option<&Children>)>,
+         decal: Single<
+            &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
+            With<ForwardDecal>,
+        >,
+         decals: Res<Decals>,
+         radio_decal: Query<&DecalTexture, With<RadioButton>>,
+         mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
+         mut commands: Commands| {
+            let radio_button_entity = ent.0 .0;
+            commands.entity(radio_button_entity).insert(Checked);
+
+            for sibling_radio_button in child.iter_siblings(radio_button_entity) {
+                info!("sibling of {radio_button_entity}: {sibling_radio_button}");
+                commands.entity(sibling_radio_button).remove::<Checked>();
+            }
+
+            let texture = match radio_decal.get(radio_button_entity).unwrap() {
+                DecalTexture::Fingerprints => &decals.fingerprints,
+                DecalTexture::Raindrops => &decals.raindrops,
+                DecalTexture::ChewingGum => &decals.chewing_gum,
+            };
+
+            if let Some(material) = materials.get_mut(&decal.clone()) {
+                material.base.base_color_texture = Some(texture.clone());
             }
         },
     );
@@ -948,9 +974,12 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.9,
                     max: 1.0,
-                    ..default()
+                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                        commands,
+                        |material, value| { material.metallic = value }
+                    )
                 },
-                (SliderPrecision(2), SliderMetallic),
+                SliderPrecision(2),
             ),
             (
                 Text("Roughness".to_owned()),
@@ -961,9 +990,12 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.1,
                     max: 1.0,
-                    ..default()
+                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                        commands,
+                        |material, value| material.perceptual_roughness = value
+                    )
                 },
-                (SliderPrecision(2), SliderRoughness),
+                SliderPrecision(2),
             ),
             (
                 Text("Clearcoat".to_owned()),
@@ -974,9 +1006,12 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 1.0,
                     max: 1.0,
-                    ..default()
+                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                        commands,
+                        |material, value| material.clearcoat = value
+                    )
                 },
-                (SliderPrecision(2), SliderClearcoat),
+                SliderPrecision(2),
             ),
             (
                 Text("Clearcoat Roughness".to_owned()),
@@ -987,9 +1022,12 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.5,
                     max: 1.0,
-                    ..default()
+                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                        commands,
+                        |material, value| material.clearcoat_perceptual_roughness = value
+                    )
                 },
-                (SliderPrecision(2), SliderClearcoatRoughness),
+                SliderPrecision(2),
             ),
             (
                 Text("Color".to_owned()),
@@ -1014,9 +1052,15 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.88,
                             max: 1.0,
-                            ..default()
+                            on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                                commands,
+                                |material, value| {
+                                    let linear = material.base_color.to_linear();
+                                    material.base_color = linear.with_red(value).into();
+                                }
+                            )
                         },
-                        (SliderPrecision(2), SliderColorR),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("G".to_owned()),
@@ -1027,9 +1071,15 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.89,
                             max: 1.0,
-                            ..default()
+                            on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                                commands,
+                                |material, value| {
+                                    let linear = material.base_color.to_linear();
+                                    material.base_color = linear.with_green(value).into();
+                                }
+                            )
                         },
-                        (SliderPrecision(2), SliderColorG),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("B".to_owned()),
@@ -1040,9 +1090,15 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.91,
                             max: 1.0,
-                            ..default()
+                            on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                                commands,
+                                |material, value| {
+                                    let linear = material.base_color.to_linear();
+                                    material.base_color = linear.with_blue(value).into();
+                                }
+                            )
                         },
-                        (SliderPrecision(2), SliderColorB),
+                        SliderPrecision(2),
                     ),
                 ]
             ),
@@ -1070,15 +1126,15 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                 },
                 children![
                     radio(
-                        (Checked, LocalRadio, RadioPickingDecalTextureFingerprints),
+                        (Checked, DecalTexture::Fingerprints),
                         Spawn((Text::new("Fingerprints"), ThemedText))
                     ),
                     radio(
-                        (LocalRadio, RadioPickingDecalTextureRaindrops),
+                        DecalTexture::Raindrops,
                         Spawn((Text::new("Raindrops"), ThemedText))
                     ),
                     radio(
-                        (LocalRadio, RadioPickingDecalTextureChewingGum),
+                        DecalTexture::ChewingGum,
                         Spawn((Text::new("Chewing Gum"), ThemedText))
                     ),
                 ]
@@ -1106,9 +1162,18 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.28,
                             max: 1.0,
-                            ..default()
+                            on_change: use_material::<
+                                ForwardDecalMaterial<StandardMaterial>,
+                                ForwardDecal,
+                            >(
+                                commands,
+                                |material, value| {
+                                    let linear = material.base.base_color.to_linear();
+                                    material.base.base_color = linear.with_red(value).into();
+                                }
+                            )
                         },
-                        (SliderPrecision(2), SliderDecalColorR),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("G".to_owned()),
@@ -1119,9 +1184,18 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.23,
                             max: 1.0,
-                            ..default()
+                            on_change: use_material::<
+                                ForwardDecalMaterial<StandardMaterial>,
+                                ForwardDecal,
+                            >(
+                                commands,
+                                |material, value| {
+                                    let linear = material.base.base_color.to_linear();
+                                    material.base.base_color = linear.with_green(value).into();
+                                }
+                            )
                         },
-                        (SliderPrecision(2), SliderDecalColorG),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("B".to_owned()),
@@ -1132,18 +1206,36 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.11,
                             max: 1.0,
-                            ..default()
+                            on_change: use_material::<
+                                ForwardDecalMaterial<StandardMaterial>,
+                                ForwardDecal,
+                            >(
+                                commands,
+                                |material, value| {
+                                    let linear = material.base.base_color.to_linear();
+                                    material.base.base_color = linear.with_blue(value).into();
+                                }
+                            )
                         },
-                        (SliderPrecision(2), SliderDecalColorB),
+                        SliderPrecision(2),
                     ),
                     slider(
                         SliderProps {
                             min: 0.0,
                             value: 0.57,
                             max: 1.0,
-                            ..default()
+                            on_change: use_material::<
+                                ForwardDecalMaterial<StandardMaterial>,
+                                ForwardDecal,
+                            >(
+                                commands,
+                                |material, value| {
+                                    let linear = material.base.base_color.to_linear();
+                                    material.base.base_color = linear.with_alpha(value).into();
+                                }
+                            )
                         },
-                        (SliderPrecision(2), SliderDecalColorA),
+                        SliderPrecision(2),
                     ),
                 ]
             ),
@@ -1156,9 +1248,21 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.1,
                     value: 1.86,
                     max: 10.0,
-                    ..default()
+                    on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
+                        commands,
+                        |material, value| {
+                            let (_, angle, translation) =
+                                material.base.uv_transform.to_scale_angle_translation();
+
+                            material.base.uv_transform = Affine2::from_scale_angle_translation(
+                                Vec2::splat(value),
+                                angle,
+                                translation,
+                            );
+                        }
+                    )
                 },
-                (SliderPrecision(2), SliderDecalScale),
+                SliderPrecision(2),
             ),
             (
                 Text("Rotation (degrees)".to_owned()),
@@ -1169,9 +1273,21 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 86.0,
                     max: 360.0,
-                    ..default()
+                    on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
+                        commands,
+                        |material, value| {
+                            let (scale, _, translation) =
+                                material.base.uv_transform.to_scale_angle_translation();
+
+                            material.base.uv_transform = Affine2::from_scale_angle_translation(
+                                scale,
+                                value.to_radians(),
+                                translation,
+                            );
+                        }
+                    )
                 },
-                (SliderPrecision(1), SliderDecalAngle),
+                SliderPrecision(1),
             )
         ],
     )
@@ -1623,7 +1739,7 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                         CheckboxProps {
                             on_change: Callback::System(checkies),
                         },
-                        (Checked, CheckboxShowGizmos),
+                        Checked,
                         Spawn((Text::new("Enabled"), ThemedText))
                     ),
                     // Focal distance node
@@ -1708,9 +1824,21 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: Callback::System(commands.register_system(
+                        |change: In<ValueChange<bool>>,
+                         mut gizmos: ResMut<GizmoConfigStore>,
+                         mut commands: Commands| {
+                            let (config, _) = gizmos.config_mut::<DefaultGizmoConfigGroup>();
+                            config.enabled = change.value;
+                            if change.value {
+                                commands.entity(change.source).insert(Checked);
+                            } else {
+                                commands.entity(change.source).remove::<Checked>();
+                            }
+                        }
+                    )),
                 },
-                (Checked, CheckboxShowGizmos),
+                Checked,
                 Spawn((Text::new("Gizmos enabled"), ThemedText))
             ),
             checkbox(
@@ -1732,16 +1860,44 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: Callback::System(commands.register_system(
+                        |change: In<ValueChange<bool>>,
+                         mut config: ResMut<FpsOverlayConfig>,
+                         mut commands: Commands| {
+                            config.enabled = change.value;
+                            config.frame_time_graph_config.enabled = change.value;
+                            if change.value {
+                                commands.entity(change.source).insert(Checked);
+                            } else {
+                                commands.entity(change.source).remove::<Checked>();
+                            }
+                        }
+                    )),
                 },
-                CheckboxShowFpsOverlay,
+                (),
                 Spawn((Text::new("Show FPS"), ThemedText))
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: Callback::System(commands.register_system(
+                        |change: In<ValueChange<bool>>,
+                         mut window: Single<&mut Window, With<PrimaryWindow>>,
+                         mut commands: Commands| {
+                            window.present_mode = if change.value {
+                                PresentMode::AutoVsync
+                            } else {
+                                PresentMode::AutoNoVsync
+                            };
+
+                            if change.value {
+                                commands.entity(change.source).insert(Checked);
+                            } else {
+                                commands.entity(change.source).remove::<Checked>();
+                            }
+                        }
+                    )),
                 },
-                (Checked, CheckboxUseVsync),
+                Checked,
                 Spawn((Text::new("Vsync"), ThemedText))
             ),
             // Picking
@@ -1811,7 +1967,7 @@ fn root_node(
     scene_image: &Handle<Image>,
 ) -> impl Bundle {
     let tabs = tabs_node(commands);
-    let geometry = geometry_node();
+    let geometry = geometry_node(commands);
     let material = material_node(commands);
     let environment = environment_node();
     let light = light_node();
@@ -1855,32 +2011,6 @@ fn root_node(
             )
         ],
     )
-}
-
-fn update_rows_cols_from_sliders(
-    mut settings: ResMut<CheckerboardSettings>,
-    slider_rows: Single<&SliderValue, With<SliderCheckerboardRows>>,
-    slider_cols: Single<&SliderValue, With<SliderCheckerboardCols>>,
-) {
-    if settings.rows != slider_rows.0 as usize {
-        settings.rows = slider_rows.0 as _;
-    }
-
-    if settings.cols != slider_cols.0 as usize {
-        settings.cols = slider_cols.0 as _;
-    }
-}
-
-fn update_square_size_from_slider(
-    mut settings: ResMut<CheckerboardSettings>,
-    slider: Single<&SliderValue, With<SliderCheckerboardSquareSizeMillimeters>>,
-) {
-    // Convert from mm to meters
-    let slider_size = slider.0 as f32 * 1e-3;
-
-    if settings.square_size != slider_size {
-        settings.square_size = slider_size;
-    }
 }
 
 fn update_checkerboard_transform_from_settings(
@@ -1930,22 +2060,6 @@ fn generate_checkerboard(
     }
 }
 
-fn update_checkerboard_color_from_sliders(
-    slider_r: Single<&SliderValue, With<SliderColorR>>,
-    slider_g: Single<&SliderValue, With<SliderColorG>>,
-    slider_b: Single<&SliderValue, With<SliderColorB>>,
-    checkerboard: Single<&MeshMaterial3d<StandardMaterial>, With<CheckerboardSettings>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let color = Color::srgb_from_array([slider_r.0, slider_g.0, slider_b.0]);
-
-    let handle = checkerboard.0.clone();
-
-    if let Some(material) = materials.get_mut(&handle) {
-        material.base_color = color;
-    }
-}
-
 fn update_camera_transform_from_sliders(
     slider_x: Single<&SliderValue, With<SliderCameraX>>,
     slider_y: Single<&SliderValue, With<SliderCameraY>>,
@@ -1991,24 +2105,6 @@ fn update_slider_font_size(
             }
         });
     }
-}
-
-fn update_checkerboard_material_from_sliders(
-    metallic: Single<&SliderValue, With<SliderMetallic>>,
-    roughness: Single<&SliderValue, With<SliderRoughness>>,
-    clearcoat: Single<&SliderValue, With<SliderClearcoat>>,
-    clearcoat_roughness: Single<&SliderValue, With<SliderClearcoatRoughness>>,
-    checkerboard: Single<&mut MeshMaterial3d<StandardMaterial>, With<CheckerboardSettings>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let handle = checkerboard.0.clone();
-
-    let material = materials.get_mut(&handle).unwrap();
-
-    material.metallic = metallic.0;
-    material.perceptual_roughness = roughness.0;
-    material.clearcoat = clearcoat.0;
-    material.clearcoat_perceptual_roughness = clearcoat_roughness.0;
 }
 
 fn update_environment_from_sliders(
@@ -2164,34 +2260,6 @@ fn corners_gizmos(
     }
 }
 
-fn enable_gizmos(
-    mut gizmos: ResMut<GizmoConfigStore>,
-    // Oh this is very broken, the "false" here is so wrong?
-    show_gizmos: Option<Single<&CheckboxShowGizmos, With<Checked>>>,
-) {
-    let (config, _) = gizmos.config_mut::<DefaultGizmoConfigGroup>();
-    config.enabled = show_gizmos.is_some();
-}
-
-fn enable_fps_overlay(
-    mut config: ResMut<FpsOverlayConfig>,
-    show_fps: Option<Single<&CheckboxShowFpsOverlay, With<Checked>>>,
-) {
-    config.enabled = show_fps.is_some();
-    config.frame_time_graph_config.enabled = show_fps.is_some();
-}
-
-fn enable_vsync(
-    mut window: Single<&mut Window, With<PrimaryWindow>>,
-    use_vsync: Option<Single<&CheckboxUseVsync, With<Checked>>>,
-) {
-    window.present_mode = if use_vsync.is_some() {
-        PresentMode::AutoVsync
-    } else {
-        PresentMode::AutoNoVsync
-    }
-}
-
 fn update_point_lights_from_sliders(
     slider_point_x: Single<&SliderValue, With<SliderLightPointX>>,
     slider_point_y: Single<&SliderValue, With<SliderLightPointY>>,
@@ -2257,36 +2325,6 @@ fn set_picking_debug(
     }
 }
 
-fn update_decal_from_sliders(
-    slider_r: Single<&SliderValue, With<SliderDecalColorR>>,
-    slider_g: Single<&SliderValue, With<SliderDecalColorG>>,
-    slider_b: Single<&SliderValue, With<SliderDecalColorB>>,
-    slider_a: Single<&SliderValue, With<SliderDecalColorA>>,
-    slider_scale: Single<&SliderValue, With<SliderDecalScale>>,
-    slider_angle: Single<&SliderValue, With<SliderDecalAngle>>,
-    mut decal: Single<
-        (
-            &mut Transform,
-            &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
-        ),
-        With<ForwardDecal>,
-    >,
-    mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
-) {
-    let color = Color::srgb_from_array([slider_r.0, slider_g.0, slider_b.0]).with_alpha(slider_a.0);
-
-    let (_transform, material_handle) = decal.deref_mut();
-
-    if let Some(material) = materials.get_mut(&material_handle.clone()) {
-        material.base.base_color = color;
-        material.base.uv_transform = Affine2::from_scale_angle_translation(
-            Vec2::splat(slider_scale.0),
-            slider_angle.0.to_radians(),
-            Vec2::ONE,
-        )
-    }
-}
-
 // Make the decal always cover the entire checkerboard
 fn update_decal_transform(
     mut decal: Single<&mut Transform, (With<ForwardDecal>, Without<CheckerboardSettings>)>,
@@ -2301,25 +2339,6 @@ fn update_decal_transform(
         ),
         ..**checkerboard
     };
-}
-
-fn set_decal_texture(
-    radio_fingerprints: Option<Single<&RadioPickingDecalTextureFingerprints, With<Checked>>>,
-    radio_raindrops: Option<Single<&RadioPickingDecalTextureRaindrops, With<Checked>>>,
-    radio_chewing_gum: Option<Single<&RadioPickingDecalTextureChewingGum, With<Checked>>>,
-    decal: Single<&MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>, With<ForwardDecal>>,
-    decals: Res<Decals>,
-    mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
-) {
-    if let Some(material) = materials.get_mut(&decal.clone()) {
-        if radio_fingerprints.is_some() {
-            material.base.base_color_texture = Some(decals.fingerprints.clone());
-        } else if radio_raindrops.is_some() {
-            material.base.base_color_texture = Some(decals.raindrops.clone());
-        } else if radio_chewing_gum.is_some() {
-            material.base.base_color_texture = Some(decals.chewing_gum.clone());
-        }
-    }
 }
 
 fn unlit_corner_spheres(
