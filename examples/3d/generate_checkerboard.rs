@@ -14,7 +14,6 @@
 // - Another render target: Shows the scene from afar such that we can see gizmos for lights etc., maybe orthographic?
 // - Macro for creating marker component
 // - More HDRIs, perhaps https://github.com/bytestring-net/bevy_skybox_cli
-// - Render resolution
 // - Some way to make a key of all settings such that we can go from image name to key and recreate images?
 // - Intrinsics with distortion model
 //  - Can custom projections help?
@@ -55,6 +54,7 @@ mod camera_controller;
 use std::iter::zip;
 
 use bevy::anti_alias::fxaa::Fxaa;
+use bevy::camera::RenderTarget;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::dev_tools::picking_debug::{DebugPickingMode, DebugPickingPlugin};
@@ -170,6 +170,15 @@ struct UnlitViewportSpheresParent {
     mesh: Handle<Mesh>,
 }
 
+#[derive(Debug, Resource, Default, Copy, Clone)]
+enum RenderResolution {
+    Res4K,
+    #[default]
+    Res1080p,
+    Res720p,
+    Res480p,
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -177,7 +186,7 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Checkmate".into(),
-                        present_mode: PresentMode::AutoNoVsync,
+                        present_mode: PresentMode::AutoVsync,
                         ..default()
                     }),
                     ..default()
@@ -218,12 +227,14 @@ fn main() {
                 },
             },
         ))
+        .init_resource::<RenderResolution>()
         .insert_resource(UiTheme(create_dark_theme()))
-        .insert_resource(DebugPickingMode::Normal)
+        .insert_resource(DebugPickingMode::Disabled)
         .init_resource::<ShowCheckerboardCornerGizmos>()
         .init_resource::<ShowCheckerboardCornerViewportSpheres>()
         .add_systems(Startup, setup)
         .add_systems(Update, draw_axes)
+        .add_systems(Update, on_render_resolution_changed)
         .add_systems(
             Update,
             (update_decal_transform, unlit_corner_spheres).chain(),
@@ -249,11 +260,11 @@ fn draw_axes(mut gizmos: Gizmos, query: Query<&Transform, With<ShowAxes>>) {
     }
 }
 
-fn image_render_target(images: &mut Assets<Image>) -> Handle<Image> {
-    let mut image = Image::new_target_texture(1920, 1080, TextureFormat::bevy_default());
+fn image_render_target(width: u32, height: u32) -> Image {
+    let mut image = Image::new_target_texture(width, height, TextureFormat::bevy_default());
     image.sampler = ImageSampler::nearest();
 
-    images.add(image)
+    image
 }
 
 fn camera_depth_of_field() -> impl Bundle {
@@ -279,8 +290,6 @@ fn setup(
     let checkboard_handle: Handle<Mesh> =
         meshes.add(create_checkerboard(checkerboard.rows, checkerboard.cols));
 
-    // commands.insert_resource(checkerboard);
-
     commands.spawn((
         Mesh3d(checkboard_handle),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -302,8 +311,7 @@ fn setup(
     let camera_and_light_transform =
         Transform::from_xyz(0.8, 0.8, 0.8).looking_at(Vec3::ZERO, Vec3::Y);
 
-    // let scene_image = image_render_target(&asset_server);
-    let scene_image = image_render_target(&mut images);
+    let scene_image = images.add(image_render_target(1920, 1080));
 
     // Camera in 3D space.
     commands
@@ -315,7 +323,7 @@ fn setup(
             Hdr,
             Camera {
                 clear_color: ClearColorConfig::Custom(palettes::tailwind::PINK_600.into()),
-                target: bevy::camera::RenderTarget::Image(scene_image.clone().into()),
+                target: RenderTarget::Image(scene_image.clone().into()),
                 ..default()
             },
             DepthPrepass,
@@ -1610,6 +1618,28 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
         },
     );
 
+    // Wrapper component to hold render resolution
+    #[derive(Debug, Component)]
+    struct RenderResolutionComponent(RenderResolution);
+
+    let radios_set_render_resolution = commands.register_system(
+        |ent: In<Activate>,
+         child: Query<(Option<&ChildOf>, Option<&Children>)>,
+         radio: Query<&RenderResolutionComponent>,
+         mut render_res: ResMut<RenderResolution>,
+         mut commands: Commands| {
+            let radio_button_entity = ent.0 .0;
+            commands.entity(radio_button_entity).insert(Checked);
+
+            for sibling_radio_button in child.iter_siblings(radio_button_entity) {
+                info!("sibling of {radio_button_entity}: {sibling_radio_button}");
+                commands.entity(sibling_radio_button).remove::<Checked>();
+            }
+
+            *render_res = radio.get(radio_button_entity).unwrap().0;
+        },
+    );
+
     (
         Node {
             display: Display::Flex,
@@ -1804,8 +1834,76 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                     ),
                 ],
             ),
+            // Render resolution
+            (
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    column_gap: px(4),
+                    ..default()
+                },
+                RadioGroup {
+                    on_change: Callback::System(radios_set_render_resolution),
+                },
+                children![
+                    (
+                        Text("Resolution".to_owned()),
+                        TextFont::from_font_size(UI_TEXT_SMALL)
+                    ),
+                    radio(
+                        RenderResolutionComponent(RenderResolution::Res4K),
+                        Spawn((Text::new("4K"), ThemedText))
+                    ),
+                    radio(
+                        (
+                            Checked,
+                            RenderResolutionComponent(RenderResolution::Res1080p)
+                        ),
+                        Spawn((Text::new("1080p"), ThemedText))
+                    ),
+                    radio(
+                        RenderResolutionComponent(RenderResolution::Res720p),
+                        Spawn((Text::new("720p"), ThemedText))
+                    ),
+                    radio(
+                        RenderResolutionComponent(RenderResolution::Res480p),
+                        Spawn((Text::new("480p"), ThemedText))
+                    ),
+                ]
+            ),
         ],
     )
+}
+
+fn on_render_resolution_changed(
+    render_res: Res<RenderResolution>,
+    mut images: ResMut<Assets<Image>>,
+    mut query: Query<&mut Camera, With<Camera3d>>,
+) {
+    if !render_res.is_changed() {
+        return;
+    }
+
+    let (width, height) = match *render_res {
+        RenderResolution::Res4K => (3840, 2160),
+        RenderResolution::Res1080p => (1920, 1080),
+        RenderResolution::Res720p => (1280, 720),
+        RenderResolution::Res480p => (854, 480),
+    };
+
+    info!("Setting render resolution to {width}x{height}");
+
+    for mut camera in &mut query {
+        let RenderTarget::Image(target) = &mut camera.target else {
+            unreachable!()
+        };
+
+        if let Some(image) = images.get_mut(target.handle.id()) {
+            *image = image_render_target(width, height);
+        } else {
+            warn!("could not find image for render target");
+        }
+    }
 }
 
 fn debug_node(commands: &mut Commands) -> impl Bundle {
