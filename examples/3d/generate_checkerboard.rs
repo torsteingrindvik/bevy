@@ -22,6 +22,7 @@
 // - Hover zoom thing
 // - Axes checkmark
 // - Camera distance to checkerboard center text display
+// - Decal scale aspect ratio independent of checkerboard aspect ratio
 
 // Scratchpad:
 //
@@ -52,7 +53,6 @@
 mod camera_controller;
 
 use std::iter::zip;
-use std::ops::Deref;
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::core_pipeline::prepass::DepthPrepass;
@@ -94,6 +94,8 @@ use bevy::{
     },
     ui_widgets::{SliderPrecision, SliderValue},
 };
+use bevy_ecs::component::Mutable;
+use bevy_ecs::query::QueryFilter;
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
@@ -108,111 +110,6 @@ const UI_ROW_GAP_PER_TAB: f32 = 8.0;
 
 #[derive(Component)]
 struct ShowAxes;
-
-#[derive(Component)]
-struct SliderCameraX;
-
-#[derive(Component)]
-struct SliderCameraY;
-
-#[derive(Component)]
-struct SliderCameraZ;
-
-#[derive(Component)]
-struct SliderSkyboxBrightness;
-
-#[derive(Component)]
-struct SliderEnvironmentIntensity;
-
-#[derive(Component)]
-struct SliderFocalDistance;
-
-#[derive(Component)]
-struct SliderSensorHeight;
-
-#[derive(Component)]
-struct SliderFStops;
-
-#[derive(Component)]
-struct SliderCameraProjectionFov;
-
-#[derive(Component)]
-struct SliderCameraAspectRatioNumerator;
-
-#[derive(Component)]
-struct SliderCameraAspectRatioDenominator;
-
-#[derive(Component)]
-struct SliderCheckerboardX;
-
-#[derive(Component)]
-struct SliderCheckerboardY;
-
-#[derive(Component)]
-struct SliderCheckerboardZ;
-
-#[derive(Component)]
-struct SliderCheckerboardRotX;
-
-#[derive(Component)]
-struct SliderCheckerboardRotY;
-
-#[derive(Component)]
-struct SliderCheckerboardRotZ;
-
-#[derive(Component)]
-struct SliderLightDirectionX;
-
-#[derive(Component)]
-struct SliderLightDirectionY;
-
-#[derive(Component)]
-struct SliderLightDirectionZ;
-
-#[derive(Component)]
-struct SliderLightPointX;
-
-#[derive(Component)]
-struct SliderLightPointY;
-
-#[derive(Component)]
-struct SliderLightPointZ;
-
-#[derive(Component)]
-struct SliderLightDirectionColorR;
-
-#[derive(Component)]
-struct SliderLightDirectionColorG;
-
-#[derive(Component)]
-struct SliderLightDirectionColorB;
-
-#[derive(Component)]
-struct SliderLightPointColorR;
-
-#[derive(Component)]
-struct SliderLightPointColorG;
-
-#[derive(Component)]
-struct SliderLightPointColorB;
-
-#[derive(Component)]
-struct CheckboxUiDebugEnabled;
-
-#[derive(Component)]
-struct CheckboxUiDebugShowHidden;
-
-#[derive(Component)]
-struct CheckboxUiDebugShowClipped;
-
-#[derive(Component)]
-struct RadioPickingDebugDisabled;
-
-#[derive(Component)]
-struct RadioPickingDebugNormal;
-
-#[derive(Component)]
-struct RadioPickingDebugNoisy;
 
 #[derive(Component)]
 struct UiTabNode;
@@ -230,11 +127,11 @@ enum UiTabVariant {
     Debug,
 }
 
-#[derive(Component)]
-struct CheckboxShowCheckerboardCornerGizmos;
+#[derive(Resource, Default)]
+struct ShowCheckerboardCornerGizmos(bool);
 
-#[derive(Component)]
-struct CheckboxShowCheckerboardCornerViewportSpheres; // Instead of in world
+#[derive(Resource, Default)]
+struct ShowCheckerboardCornerViewportSpheres(bool);
 
 #[derive(Debug, Resource)]
 struct Decals {
@@ -249,6 +146,23 @@ enum DecalTexture {
     Raindrops,
     ChewingGum,
 }
+
+#[derive(Component, Debug)]
+struct Checkerboard {
+    rows: usize,
+    cols: usize,
+    square_size: f32,
+}
+
+/// Marker component for the checkerboard corner gizmos.
+/// Positions set by calculating from the checkerboard settings.
+#[derive(Component, Debug)]
+struct CheckerboardCornerGizmo;
+
+/// Marker component for the checkerboard corner unlit spheres.
+/// Positions set from projecting from viewport to world space.
+#[derive(Component, Debug)]
+struct CheckerboardCornerUnlitSphere;
 
 #[derive(Debug, Resource)]
 struct UnlitViewportSpheresParent {
@@ -306,34 +220,22 @@ fn main() {
         ))
         .insert_resource(UiTheme(create_dark_theme()))
         .insert_resource(DebugPickingMode::Normal)
+        .init_resource::<ShowCheckerboardCornerGizmos>()
+        .init_resource::<ShowCheckerboardCornerViewportSpheres>()
         .add_systems(Startup, setup)
         .add_systems(Update, draw_axes)
         .add_systems(
             Update,
-            (
-                update_camera_transform_from_sliders,
-                update_camera_projection_from_sliders,
-                update_checkerboard_transform_from_sliders,
-                update_checkerboard_transform_from_settings,
-                update_decal_transform,
-                unlit_corner_spheres,
-            )
-                .chain(),
+            (update_decal_transform, unlit_corner_spheres).chain(),
         )
         .add_systems(Update, update_slider_height)
         .add_systems(Update, update_slider_font_size)
-        .add_systems(Update, update_environment_from_sliders)
-        .add_systems(Update, update_depth_of_field_from_sliders)
         .add_systems(Update, update_node_visibility_from_ui_tab_variant)
-        .add_systems(Update, update_directional_lights_from_sliders)
-        .add_systems(Update, update_point_lights_from_sliders)
-        .add_systems(Update, set_ui_debug_options)
-        .add_systems(Update, set_picking_debug)
         .add_systems(
             Update,
             (
                 generate_checkerboard,
-                maintain_corners_as_checkerboard_children,
+                checkerboard_changed_add_corner_children,
             )
                 .chain(),
         )
@@ -345,14 +247,6 @@ fn draw_axes(mut gizmos: Gizmos, query: Query<&Transform, With<ShowAxes>>) {
     for &transform in &query {
         gizmos.axes(transform, 1.0);
     }
-}
-
-#[derive(Component, Resource, PartialEq, Clone, Copy, Debug)]
-struct CheckerboardSettings {
-    rows: usize,
-    cols: usize,
-    /// Metric size of each square
-    square_size: f32,
 }
 
 fn image_render_target(images: &mut Assets<Image>) -> Handle<Image> {
@@ -377,14 +271,15 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut decal_standard_materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
 ) {
-    let checkerboard = CheckerboardSettings {
+    let checkerboard = Checkerboard {
         rows: 11,
         cols: 10,
-        square_size: 78e-3, // 78mm
+        square_size: 78. * 1e-3, // 78mm
     };
-    let checkboard_handle: Handle<Mesh> = meshes.add(create_checkerboard(checkerboard));
+    let checkboard_handle: Handle<Mesh> =
+        meshes.add(create_checkerboard(checkerboard.rows, checkerboard.cols));
 
-    commands.insert_resource(checkerboard);
+    // commands.insert_resource(checkerboard);
 
     commands.spawn((
         Mesh3d(checkboard_handle),
@@ -504,8 +399,7 @@ fn setup(
 
 /// Create a checkerboard mesh with the specified number of rows and columns.
 /// Note that rows and cols is not the same as inner corners.
-fn create_checkerboard(settings: CheckerboardSettings) -> Mesh {
-    let CheckerboardSettings { rows, cols, .. } = settings;
+fn create_checkerboard(rows: usize, cols: usize) -> Mesh {
     // Strategy for creating the vertex positions:
     //
     // - Columns increase in the +X direction (right) by one unit per column
@@ -594,6 +488,63 @@ fn button_selector(clicked: In<Activate>, mut buttons: Query<(Entity, &mut Butto
     }
 }
 
+fn slider_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
+    commands: &mut Commands,
+    use_with_new_value: impl Fn(&mut C, f32) + Send + Sync + 'static,
+) -> Callback<In<ValueChange<f32>>> {
+    Callback::System(commands.register_system(
+        move |change: In<ValueChange<f32>>,
+              mut commands: Commands,
+              mut component: Query<&mut C, F>| {
+            commands
+                .entity(change.source)
+                .insert(SliderValue(change.value));
+
+            for mut c in &mut component {
+                use_with_new_value(&mut c, change.value);
+            }
+        },
+    ))
+}
+
+fn checkbox_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
+    commands: &mut Commands,
+    use_with_new_value: impl Fn(&mut C, bool) + Send + Sync + 'static,
+) -> Callback<In<ValueChange<bool>>> {
+    Callback::System(commands.register_system(
+        move |change: In<ValueChange<bool>>,
+              mut commands: Commands,
+              mut component: Query<&mut C, F>| {
+            if change.value {
+                commands.entity(change.source).insert(Checked);
+            } else {
+                commands.entity(change.source).remove::<Checked>();
+            };
+
+            for mut c in &mut component {
+                use_with_new_value(&mut c, change.value);
+            }
+        },
+    ))
+}
+
+fn checkbox_resource<R: Resource>(
+    commands: &mut Commands,
+    use_with_new_value: impl Fn(&mut R, bool) + Send + Sync + 'static,
+) -> Callback<In<ValueChange<bool>>> {
+    Callback::System(commands.register_system(
+        move |change: In<ValueChange<bool>>, mut commands: Commands, mut resource: ResMut<R>| {
+            if change.value {
+                commands.entity(change.source).insert(Checked);
+            } else {
+                commands.entity(change.source).remove::<Checked>();
+            };
+
+            use_with_new_value(&mut resource, change.value);
+        },
+    ))
+}
+
 fn tabs_node(commands: &mut Commands) -> impl Bundle + use<> {
     let tabs_callback = commands.register_system(button_selector);
 
@@ -669,16 +620,16 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
         use_with_new_value: impl Fn(&mut Transform, f32) + Send + Sync + 'static,
     ) -> Callback<In<ValueChange<f32>>> {
         Callback::System(commands.register_system(
-        move |change: In<ValueChange<f32>>,
-              mut commands: Commands,
-              mut checkerboard: Single<&mut Transform, With<CheckerboardSettings>>| {
-            commands
-                .entity(change.source)
-                .insert(SliderValue(change.value));
+            move |change: In<ValueChange<f32>>,
+                  mut commands: Commands,
+                  mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                commands
+                    .entity(change.source)
+                    .insert(SliderValue(change.value));
 
-            use_with_new_value(&mut checkerboard, change.value);
-        },
-    ))
+                use_with_new_value(&mut checkerboard, change.value);
+            },
+        ))
     }
 
     // Checkerboard settings node
@@ -707,16 +658,12 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 2.0,
                     value: 11.0,
                     max: 20.0,
-                    on_change: Callback::System(commands.register_system(
-                        |change: In<ValueChange<f32>>,
-                         mut commands: Commands,
-                         mut settings: ResMut<CheckerboardSettings>| {
-                            commands
-                                .entity(change.source)
-                                .insert(SliderValue(change.value));
-                            settings.rows = change.value as _;
+                    on_change: slider_component::<Checkerboard, ()>(
+                        commands,
+                        |checkerboard, value| {
+                            checkerboard.rows = value as _;
                         }
-                    ))
+                    ),
                 },
                 SliderPrecision(0),
             ),
@@ -729,16 +676,12 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 2.0,
                     value: 10.0,
                     max: 20.0,
-                    on_change: Callback::System(commands.register_system(
-                        |change: In<ValueChange<f32>>,
-                         mut commands: Commands,
-                         mut settings: ResMut<CheckerboardSettings>| {
-                            commands
-                                .entity(change.source)
-                                .insert(SliderValue(change.value));
-                            settings.cols = change.value as _;
+                    on_change: slider_component::<Checkerboard, ()>(
+                        commands,
+                        |checkerboard, value| {
+                            checkerboard.cols = value as _;
                         }
-                    ))
+                    ),
                 },
                 SliderPrecision(0),
             ),
@@ -751,17 +694,13 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 5.0,
                     value: 78.0,
                     max: 100.0,
-
-                    on_change: Callback::System(commands.register_system(
-                        |change: In<ValueChange<f32>>,
-                         mut commands: Commands,
-                         mut settings: ResMut<CheckerboardSettings>| {
-                            commands
-                                .entity(change.source)
-                                .insert(SliderValue(change.value));
-                            settings.square_size = change.value * 1e-3; // convert from mm
+                    on_change: slider_component::<Checkerboard, ()>(
+                        commands,
+                        |checkerboard, value| {
+                            // mm to meters
+                            checkerboard.square_size = value * 1e-3;
                         }
-                    ))
+                    ),
                 },
                 SliderPrecision(0),
             ),
@@ -974,7 +913,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.9,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                    on_change: use_material::<StandardMaterial, Checkerboard>(
                         commands,
                         |material, value| { material.metallic = value }
                     )
@@ -990,7 +929,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.1,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                    on_change: use_material::<StandardMaterial, Checkerboard>(
                         commands,
                         |material, value| material.perceptual_roughness = value
                     )
@@ -1006,7 +945,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 1.0,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                    on_change: use_material::<StandardMaterial, Checkerboard>(
                         commands,
                         |material, value| material.clearcoat = value
                     )
@@ -1022,7 +961,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.5,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                    on_change: use_material::<StandardMaterial, Checkerboard>(
                         commands,
                         |material, value| material.clearcoat_perceptual_roughness = value
                     )
@@ -1052,7 +991,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.88,
                             max: 1.0,
-                            on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                            on_change: use_material::<StandardMaterial, Checkerboard>(
                                 commands,
                                 |material, value| {
                                     let linear = material.base_color.to_linear();
@@ -1071,7 +1010,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.89,
                             max: 1.0,
-                            on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                            on_change: use_material::<StandardMaterial, Checkerboard>(
                                 commands,
                                 |material, value| {
                                     let linear = material.base_color.to_linear();
@@ -1090,7 +1029,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.91,
                             max: 1.0,
-                            on_change: use_material::<StandardMaterial, CheckerboardSettings>(
+                            on_change: use_material::<StandardMaterial, Checkerboard>(
                                 commands,
                                 |material, value| {
                                     let linear = material.base_color.to_linear();
@@ -1293,7 +1232,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
     )
 }
 
-fn environment_node() -> impl Bundle {
+fn environment_node(commands: &mut Commands) -> impl Bundle + use<> {
     (
         Node {
             display: Display::Flex,
@@ -1319,9 +1258,11 @@ fn environment_node() -> impl Bundle {
                     min: 0.0,
                     value: 7000.0,
                     max: 10000.0,
-                    ..default()
+                    on_change: slider_component::<Skybox, ()>(commands, |skybox, value| {
+                        skybox.brightness = value;
+                    }),
                 },
-                (SliderPrecision(-3), SliderSkyboxBrightness),
+                SliderPrecision(-3),
             ),
             (
                 Text("Environment Intensity".to_owned()),
@@ -1332,15 +1273,20 @@ fn environment_node() -> impl Bundle {
                     min: 0.0,
                     value: 300.0,
                     max: 10000.0,
-                    ..default()
+                    on_change: slider_component::<EnvironmentMapLight, ()>(
+                        commands,
+                        |envmap, value| {
+                            envmap.intensity = value;
+                        }
+                    ),
                 },
-                (SliderPrecision(-2), SliderEnvironmentIntensity),
+                SliderPrecision(-2),
             ),
         ],
     )
 }
 
-fn light_node() -> impl Bundle {
+fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
     (
         Node {
             display: Display::Flex,
@@ -1379,11 +1325,19 @@ fn light_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            ..default()
+                            value: 100.0,
+                            max: 360.0,
+                            on_change: slider_component::<Transform, With<DirectionalLight>>(
+                                commands,
+                                |light_transform, value| {
+                                    let (_, y, z) =
+                                        light_transform.rotation.to_euler(EulerRot::XYZEx);
+                                    light_transform.rotation =
+                                        Quat::from_euler(EulerRot::XYZEx, value.to_radians(), y, z)
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightDirectionX),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Y".to_owned()),
@@ -1391,12 +1345,20 @@ fn light_node() -> impl Bundle {
                     ),
                     slider(
                         SliderProps {
-                            min: 0.1,
-                            value: 0.8,
-                            max: 1.0,
-                            ..default()
+                            min: 0.0,
+                            value: 100.0,
+                            max: 360.0,
+                            on_change: slider_component::<Transform, With<DirectionalLight>>(
+                                commands,
+                                |light_transform, value| {
+                                    let (x, _, z) =
+                                        light_transform.rotation.to_euler(EulerRot::XYZEx);
+                                    light_transform.rotation =
+                                        Quat::from_euler(EulerRot::XYZEx, x, value.to_radians(), z)
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightDirectionY),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Z".to_owned()),
@@ -1405,12 +1367,20 @@ fn light_node() -> impl Bundle {
                     slider(
                         SliderProps {
                             min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            ..default()
+                            value: 100.0,
+                            max: 360.0,
+                            on_change: slider_component::<Transform, With<DirectionalLight>>(
+                                commands,
+                                |light_transform, value| {
+                                    let (x, y, _) =
+                                        light_transform.rotation.to_euler(EulerRot::XYZEx);
+                                    light_transform.rotation =
+                                        Quat::from_euler(EulerRot::XYZEx, x, y, value.to_radians())
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightDirectionZ),
-                    ),
+                        SliderPrecision(2)
+                    )
                 ]
             ),
             // Direction RGB
@@ -1433,9 +1403,14 @@ fn light_node() -> impl Bundle {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<DirectionalLight, ()>(
+                                commands,
+                                |light, value| {
+                                    light.color = light.color.to_linear().with_red(value).into();
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightDirectionColorR),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("G".to_owned()),
@@ -1446,9 +1421,14 @@ fn light_node() -> impl Bundle {
                             min: 0.1,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<DirectionalLight, ()>(
+                                commands,
+                                |light, value| {
+                                    light.color = light.color.to_linear().with_green(value).into();
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightDirectionColorG),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("B".to_owned()),
@@ -1459,9 +1439,14 @@ fn light_node() -> impl Bundle {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<DirectionalLight, ()>(
+                                commands,
+                                |light, value| {
+                                    light.color = light.color.to_linear().with_blue(value).into();
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightDirectionColorB),
+                        SliderPrecision(2),
                     ),
                 ]
             ),
@@ -1488,9 +1473,14 @@ fn light_node() -> impl Bundle {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<Transform, With<PointLight>>(
+                                commands,
+                                |light_transform, value| {
+                                    light_transform.translation.x = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightPointX),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Y".to_owned()),
@@ -1501,9 +1491,14 @@ fn light_node() -> impl Bundle {
                             min: 0.1,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<Transform, With<PointLight>>(
+                                commands,
+                                |light_transform, value| {
+                                    light_transform.translation.y = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightPointY),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Z".to_owned()),
@@ -1514,9 +1509,14 @@ fn light_node() -> impl Bundle {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<Transform, With<PointLight>>(
+                                commands,
+                                |light_transform, value| {
+                                    light_transform.translation.z = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightPointZ),
+                        SliderPrecision(2),
                     ),
                 ]
             ),
@@ -1540,9 +1540,14 @@ fn light_node() -> impl Bundle {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<PointLight, ()>(
+                                commands,
+                                |light, value| {
+                                    light.color = light.color.to_linear().with_red(value).into();
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightPointColorR),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("G".to_owned()),
@@ -1553,9 +1558,14 @@ fn light_node() -> impl Bundle {
                             min: 0.1,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<PointLight, ()>(
+                                commands,
+                                |light, value| {
+                                    light.color = light.color.to_linear().with_green(value).into();
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightPointColorG),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("B".to_owned()),
@@ -1566,9 +1576,14 @@ fn light_node() -> impl Bundle {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            ..default()
+                            on_change: slider_component::<PointLight, ()>(
+                                commands,
+                                |light, value| {
+                                    light.color = light.color.to_linear().with_blue(value).into();
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderLightPointColorB),
+                        SliderPrecision(2),
                     ),
                 ]
             ),
@@ -1577,7 +1592,7 @@ fn light_node() -> impl Bundle {
 }
 
 fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
-    let checkies = commands.register_system(
+    let insert_or_remove_depth_of_field = commands.register_system(
         |change: In<ValueChange<bool>>,
          camera: Single<Entity, (With<Camera>, With<Camera3d>)>,
          mut commands: Commands| {
@@ -1630,9 +1645,14 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.43,
                             max: 3.0,
-                            ..default()
+                            on_change: slider_component::<Transform, With<Camera3d>>(
+                                commands,
+                                |light_transform, value| {
+                                    light_transform.translation.x = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderCameraX),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Y".to_owned()),
@@ -1643,9 +1663,14 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.1,
                             value: 0.81,
                             max: 3.0,
-                            ..default()
+                            on_change: slider_component::<Transform, With<Camera3d>>(
+                                commands,
+                                |light_transform, value| {
+                                    light_transform.translation.y = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderCameraY),
+                        SliderPrecision(2),
                     ),
                     (
                         Text("Z".to_owned()),
@@ -1656,9 +1681,14 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.01,
                             max: 3.0,
-                            ..default()
+                            on_change: slider_component::<Transform, With<Camera3d>>(
+                                commands,
+                                |light_transform, value| {
+                                    light_transform.translation.z = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderCameraZ),
+                        SliderPrecision(2),
                     ),
                 ]
             ),
@@ -1677,48 +1707,21 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 10.0,
                     value: 45.0,
                     max: 135.0,
-                    ..default()
+                    on_change: slider_component::<Projection, With<Camera3d>>(
+                        commands,
+                        |projection, value| {
+                            let perspective = match projection {
+                                Projection::Perspective(p) => p,
+                                _ => {
+                                    unimplemented!();
+                                }
+                            };
+
+                            perspective.fov = value.to_radians();
+                        }
+                    ),
                 },
-                (SliderPrecision(1), SliderCameraProjectionFov),
-            ),
-            // Aspect ratio
-            (
-                Text("Aspect Ratio".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
-            (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    row_gap: px(UI_ROW_GAP_PER_TAB),
-                    ..default()
-                },
-                children![
-                    slider(
-                        SliderProps {
-                            min: 1.0,
-                            value: 16.0,
-                            max: 30.0,
-                            ..default()
-                        },
-                        (SliderPrecision(0), SliderCameraAspectRatioNumerator),
-                    ),
-                    (
-                        Text(":".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
-                    slider(
-                        SliderProps {
-                            min: 1.0,
-                            value: 9.0,
-                            max: 30.0,
-                            ..default()
-                        },
-                        (SliderPrecision(0), SliderCameraAspectRatioDenominator),
-                    ),
-                ],
+                SliderPrecision(1),
             ),
             // DoF
             (
@@ -1737,7 +1740,7 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                     ),
                     checkbox(
                         CheckboxProps {
-                            on_change: Callback::System(checkies),
+                            on_change: Callback::System(insert_or_remove_depth_of_field),
                         },
                         Checked,
                         Spawn((Text::new("Enabled"), ThemedText))
@@ -1752,9 +1755,14 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.3,
                             value: 0.61,
                             max: 10.0,
-                            ..default()
+                            on_change: slider_component::<DepthOfField, ()>(
+                                commands,
+                                |dof, value| {
+                                    dof.focal_distance = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderFocalDistance),
+                        SliderPrecision(2),
                     ),
                     // Sensor height node
                     (
@@ -1766,9 +1774,14 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 5.0,
                             value: 10.18,
                             max: 50.0,
-                            ..default()
+                            on_change: slider_component::<DepthOfField, ()>(
+                                commands,
+                                |dof, value| {
+                                    dof.sensor_height = value * 1e-3; // mm to meters
+                                }
+                            ),
                         },
-                        (SliderPrecision(2), SliderSensorHeight),
+                        SliderPrecision(2),
                     ),
                     // F-stops node
                     (
@@ -1780,9 +1793,14 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.1,
                             value: 2.5,
                             max: 3.0,
-                            ..default()
+                            on_change: slider_component::<DepthOfField, ()>(
+                                commands,
+                                |dof, value| {
+                                    dof.aperture_f_stops = value;
+                                }
+                            ),
                         },
-                        (SliderPrecision(1), SliderFStops),
+                        SliderPrecision(1),
                     ),
                 ],
             ),
@@ -1791,18 +1809,25 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
 }
 
 fn debug_node(commands: &mut Commands) -> impl Bundle {
-    #[derive(Component)]
-    struct LocalRadio;
+    // Wrapper component to hold DebugPickingMode so we can query radios by that
+    #[derive(Debug, Component)]
+    struct DebugPickingModeComponent(DebugPickingMode);
 
-    let radio_check = commands.register_system(
-        |ent: In<Activate>, q_radio: Query<Entity, With<LocalRadio>>, mut commands: Commands| {
-            for radio in q_radio.iter() {
-                if radio == ent.0 .0 {
-                    commands.entity(radio).insert(Checked);
-                } else {
-                    commands.entity(radio).remove::<Checked>();
-                }
+    let radios_set_picking_mode = commands.register_system(
+        |ent: In<Activate>,
+         child: Query<(Option<&ChildOf>, Option<&Children>)>,
+         radio: Query<&DebugPickingModeComponent>,
+         mut picking_debug: ResMut<DebugPickingMode>,
+         mut commands: Commands| {
+            let radio_button_entity = ent.0 .0;
+            commands.entity(radio_button_entity).insert(Checked);
+
+            for sibling_radio_button in child.iter_siblings(radio_button_entity) {
+                info!("sibling of {radio_button_entity}: {sibling_radio_button}");
+                commands.entity(sibling_radio_button).remove::<Checked>();
             }
+
+            *picking_debug = radio.get(radio_button_entity).unwrap().0;
         },
     );
 
@@ -1824,35 +1849,36 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::System(commands.register_system(
-                        |change: In<ValueChange<bool>>,
-                         mut gizmos: ResMut<GizmoConfigStore>,
-                         mut commands: Commands| {
-                            let (config, _) = gizmos.config_mut::<DefaultGizmoConfigGroup>();
-                            config.enabled = change.value;
-                            if change.value {
-                                commands.entity(change.source).insert(Checked);
-                            } else {
-                                commands.entity(change.source).remove::<Checked>();
-                            }
-                        }
-                    )),
+                    on_change: checkbox_resource::<GizmoConfigStore>(commands, |store, checked| {
+                        let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
+                        config.enabled = checked;
+                    })
                 },
                 Checked,
                 Spawn((Text::new("Gizmos enabled"), ThemedText))
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: checkbox_resource::<ShowCheckerboardCornerGizmos>(
+                        commands,
+                        |show, checked| {
+                            show.0 = checked;
+                        }
+                    )
                 },
-                CheckboxShowCheckerboardCornerGizmos,
+                (),
                 Spawn((Text::new("Checkerboard corner world gizmos"), ThemedText))
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: checkbox_resource::<ShowCheckerboardCornerViewportSpheres>(
+                        commands,
+                        |show, checked| {
+                            show.0 = checked;
+                        }
+                    )
                 },
-                CheckboxShowCheckerboardCornerViewportSpheres,
+                (),
                 Spawn((
                     Text::new("Checkerboard corner viewport spheres"),
                     ThemedText
@@ -1860,42 +1886,29 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::System(commands.register_system(
-                        |change: In<ValueChange<bool>>,
-                         mut config: ResMut<FpsOverlayConfig>,
-                         mut commands: Commands| {
-                            config.enabled = change.value;
-                            config.frame_time_graph_config.enabled = change.value;
-                            if change.value {
-                                commands.entity(change.source).insert(Checked);
-                            } else {
-                                commands.entity(change.source).remove::<Checked>();
-                            }
+                    on_change: checkbox_resource::<FpsOverlayConfig>(
+                        commands,
+                        |config, checked| {
+                            config.enabled = checked;
+                            config.frame_time_graph_config.enabled = checked;
                         }
-                    )),
+                    )
                 },
                 (),
                 Spawn((Text::new("Show FPS"), ThemedText))
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::System(commands.register_system(
-                        |change: In<ValueChange<bool>>,
-                         mut window: Single<&mut Window, With<PrimaryWindow>>,
-                         mut commands: Commands| {
-                            window.present_mode = if change.value {
+                    on_change: checkbox_component::<Window, With<PrimaryWindow>>(
+                        commands,
+                        |window, checked| {
+                            window.present_mode = if checked {
                                 PresentMode::AutoVsync
                             } else {
                                 PresentMode::AutoNoVsync
                             };
-
-                            if change.value {
-                                commands.entity(change.source).insert(Checked);
-                            } else {
-                                commands.entity(change.source).remove::<Checked>();
-                            }
                         }
-                    )),
+                    )
                 },
                 Checked,
                 Spawn((Text::new("Vsync"), ThemedText))
@@ -1909,7 +1922,7 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                     ..default()
                 },
                 RadioGroup {
-                    on_change: Callback::System(radio_check),
+                    on_change: Callback::System(radios_set_picking_mode),
                 },
                 children![
                     (
@@ -1917,15 +1930,18 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                         TextFont::from_font_size(UI_TEXT_SMALL)
                     ),
                     radio(
-                        (Checked, RadioPickingDebugDisabled, LocalRadio),
+                        (
+                            Checked,
+                            DebugPickingModeComponent(DebugPickingMode::Disabled)
+                        ),
                         Spawn((Text::new("Disabled"), ThemedText))
                     ),
                     radio(
-                        (RadioPickingDebugNormal, LocalRadio),
+                        DebugPickingModeComponent(DebugPickingMode::Normal),
                         Spawn((Text::new("Normal"), ThemedText))
                     ),
                     radio(
-                        (RadioPickingDebugNoisy, LocalRadio),
+                        DebugPickingModeComponent(DebugPickingMode::Noisy),
                         Spawn((Text::new("Noisy"), ThemedText))
                     ),
                 ]
@@ -1938,23 +1954,29 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
+                        opts.enabled = checked;
+                    })
                 },
-                CheckboxUiDebugEnabled,
+                (),
                 Spawn((Text::new("Enabled"), ThemedText))
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
+                        opts.show_hidden = checked;
+                    })
                 },
-                CheckboxUiDebugShowHidden,
+                (),
                 Spawn((Text::new("Show hidden"), ThemedText))
             ),
             checkbox(
                 CheckboxProps {
-                    on_change: Callback::Ignore,
+                    on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
+                        opts.show_clipped = checked;
+                    })
                 },
-                CheckboxUiDebugShowClipped,
+                (),
                 Spawn((Text::new("Show clipped"), ThemedText))
             )
         ],
@@ -1969,8 +1991,8 @@ fn root_node(
     let tabs = tabs_node(commands);
     let geometry = geometry_node(commands);
     let material = material_node(commands);
-    let environment = environment_node();
-    let light = light_node();
+    let environment = environment_node(commands);
+    let light = light_node(commands);
     let camera = camera_node(commands);
     let debug = debug_node(commands);
 
@@ -2013,86 +2035,28 @@ fn root_node(
     )
 }
 
-fn update_checkerboard_transform_from_settings(
-    settings: Res<CheckerboardSettings>,
-    mut checkerboard: Single<&mut Transform, With<CheckerboardSettings>>,
-) {
-    checkerboard.scale = Vec3::splat(settings.square_size);
-}
-
-fn update_checkerboard_transform_from_sliders(
-    slider_x: Single<&SliderValue, With<SliderCheckerboardX>>,
-    slider_y: Single<&SliderValue, With<SliderCheckerboardY>>,
-    slider_z: Single<&SliderValue, With<SliderCheckerboardZ>>,
-
-    slider_rot_x: Single<&SliderValue, With<SliderCheckerboardRotX>>,
-    slider_rot_y: Single<&SliderValue, With<SliderCheckerboardRotY>>,
-    slider_rot_z: Single<&SliderValue, With<SliderCheckerboardRotZ>>,
-
-    mut checkerboard: Single<&mut Transform, With<CheckerboardSettings>>,
-) {
-    checkerboard.translation = Vec3::new(slider_x.0, slider_y.0, slider_z.0);
-    checkerboard.rotation = Quat::from_euler(
-        EulerRot::XYZEx,
-        slider_rot_x.0.to_radians(),
-        slider_rot_y.0.to_radians(),
-        slider_rot_z.0.to_radians(),
-    );
-}
-
+// Generate a new checkerboard mesh if the settings changed.
 fn generate_checkerboard(
-    settings: Res<CheckerboardSettings>,
-    mut checkerboards: Query<(&mut Mesh3d, &mut CheckerboardSettings)>,
+    mut checkerboards: Query<(&mut Mesh3d, &mut Transform, &Checkerboard), Changed<Checkerboard>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    if settings.is_changed() {
-        for (mut mesh, mut mesh_settings) in &mut checkerboards {
-            if *settings == *mesh_settings {
-                // don't recreate mesh if settings are the same
-                continue;
-            }
+    for (mut mesh, mut transform, settings) in &mut checkerboards {
+        info!("changed to {:?}", *settings);
 
-            info!("changed to {:?}", *settings);
-
-            **mesh = meshes.add(create_checkerboard(*settings));
-            *mesh_settings = *settings;
-        }
+        **mesh = meshes.add(create_checkerboard(settings.rows, settings.cols));
+        transform.scale = Vec3::splat(settings.square_size);
     }
 }
 
-fn update_camera_transform_from_sliders(
-    slider_x: Single<&SliderValue, With<SliderCameraX>>,
-    slider_y: Single<&SliderValue, With<SliderCameraY>>,
-    slider_z: Single<&SliderValue, With<SliderCameraZ>>,
-    mut camera_transform: Single<&mut Transform, With<Camera3d>>,
-) {
-    camera_transform.translation = Vec3::new(slider_x.0, slider_y.0, slider_z.0);
-    camera_transform.look_at(Vec3::ZERO, Vec3::Y);
-}
-
-fn update_camera_projection_from_sliders(
-    slider_fov: Single<&SliderValue, With<SliderCameraProjectionFov>>,
-    slider_aspect_ratio_numerator: Single<&SliderValue, With<SliderCameraAspectRatioNumerator>>,
-    slider_aspect_ratio_denominator: Single<&SliderValue, With<SliderCameraAspectRatioDenominator>>,
-    mut camera_transform: Single<&mut Projection, With<Camera3d>>,
-) {
-    let perspective = match camera_transform.as_mut() {
-        Projection::Perspective(p) => p,
-        _ => {
-            unimplemented!();
-        }
-    };
-
-    perspective.fov = slider_fov.0.to_radians();
-    perspective.aspect_ratio = slider_aspect_ratio_numerator.0 / slider_aspect_ratio_denominator.0;
-}
-
+// Iterate over all sliders and set their height to 12px to make the UI less cluttered.
 fn update_slider_height(mut sliders: Query<&mut Node, With<Slider>>) {
     for mut node in &mut sliders {
         node.height = px(12);
     }
 }
 
+// Iterate over all sliders and set their text font size to small to make
+// the UI less cluttered.
 fn update_slider_font_size(
     mut q_sliders: Query<Entity, With<Slider>>,
     q_children: Query<&Children>,
@@ -2107,32 +2071,8 @@ fn update_slider_font_size(
     }
 }
 
-fn update_environment_from_sliders(
-    slider_skybox_brightness: Single<&SliderValue, With<SliderSkyboxBrightness>>,
-    slider_environment_intensity: Single<&SliderValue, With<SliderEnvironmentIntensity>>,
-    mut q_skybox: Query<&mut Skybox>,
-    mut q_envmap: Query<&mut EnvironmentMapLight>,
-) {
-    for mut skybox in &mut q_skybox {
-        skybox.brightness = slider_skybox_brightness.0;
-    }
-
-    for mut envmap in &mut q_envmap {
-        envmap.intensity = slider_environment_intensity.0;
-    }
-}
-
-fn update_depth_of_field_from_sliders(
-    slider_focal_distance: Single<&SliderValue, With<SliderFocalDistance>>,
-    slider_sensor_height: Single<&SliderValue, With<SliderSensorHeight>>,
-    slider_f_stops: Single<&SliderValue, With<SliderFStops>>,
-    mut dof: Single<&mut DepthOfField>,
-) {
-    dof.focal_distance = slider_focal_distance.0;
-    dof.sensor_height = slider_sensor_height.0 * 1e-3; // mm to meters
-    dof.aperture_f_stops = slider_f_stops.0;
-}
-
+// Show only the node that corresponds to the selected tab.
+// The others get display: none and are hidden.
 fn update_node_visibility_from_ui_tab_variant(
     buttons: Query<(&ButtonVariant, &UiTabVariant)>,
     mut query: Query<(&UiTabVariant, &mut Node), With<UiTabNode>>,
@@ -2158,86 +2098,89 @@ fn update_node_visibility_from_ui_tab_variant(
     }
 }
 
-fn maintain_corners_as_checkerboard_children(
+// When the checkerboard settings change, respawn new corner children to the checkerboard
+fn checkerboard_changed_add_corner_children(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
     unlit_parent: Res<UnlitViewportSpheresParent>,
-    checkerboard_res: Res<CheckerboardSettings>,
-    checkerboards: Query<(Entity, &CheckerboardSettings)>,
+    checkerboards: Query<(Entity, &Checkerboard), Changed<Checkerboard>>,
 ) {
-    if checkerboard_res.is_changed() {
-        for (checkerboard, settings) in &checkerboards {
-            let CheckerboardSettings { rows, cols, .. } = *settings;
+    for (checkerboard, settings) in &checkerboards {
+        let Checkerboard { rows, cols, .. } = *settings;
 
-            info!("making new corner position kids for {checkerboard}, settings: {rows}x{cols} vs {:?}", checkerboard_res.deref());
+        info!("making new corner position kids for {checkerboard}, settings: {rows}x{cols}",);
 
-            // Start over
-            commands.entity(checkerboard).despawn_children();
-            commands.entity(unlit_parent.parent).despawn_children();
+        // Start over
+        commands.entity(checkerboard).despawn_children();
+        commands.entity(unlit_parent.parent).despawn_children();
 
-            let mut checkerboard_children = vec![];
-            let mut unlit_children = vec![];
+        let mut checkerboard_children = vec![];
+        let mut unlit_children = vec![];
 
-            let half = Vec3::new(cols as f32, 0.0, rows as f32) / 2.0;
+        let half = Vec3::new(cols as f32, 0.0, rows as f32) / 2.0;
 
-            let green = palettes::basic::GREEN;
-            let red = palettes::basic::RED;
+        let green = palettes::basic::GREEN;
+        let red = palettes::basic::RED;
 
-            let num_corners = (rows - 1) * (cols - 1);
+        let num_corners = (rows - 1) * (cols - 1);
 
-            let mut id = 0;
-            for row in 1..rows {
-                for col in 1..cols {
-                    let position = Vec3::new(col as f32, 0.0, row as f32) - half;
+        let mut id = 0;
+        for row in 1..rows {
+            for col in 1..cols {
+                let position = Vec3::new(col as f32, 0.0, row as f32) - half;
 
-                    checkerboard_children.push(
-                        commands
-                            .spawn((Transform::from_translation(position), CornerId(id)))
-                            .id(),
-                    );
+                checkerboard_children.push(
+                    commands
+                        .spawn((
+                            Transform::from_translation(position),
+                            CornerId(id),
+                            CheckerboardCornerGizmo,
+                        ))
+                        .id(),
+                );
 
-                    let color = green.mix(&red, id as f32 / num_corners as f32);
+                let color = green.mix(&red, id as f32 / num_corners as f32);
 
-                    unlit_children.push(
-                        commands
-                            .spawn((
-                                Transform::default(),
-                                CornerId(id),
-                                Mesh3d(unlit_parent.mesh.clone()),
-                                MeshMaterial3d(materials.add(StandardMaterial {
-                                    base_color: color.into(),
-                                    unlit: true,
-                                    cull_mode: None,
-                                    depth_bias: 1.0,
-                                    double_sided: true,
-                                    ..default()
-                                })),
-                            ))
-                            .id(),
-                    );
+                unlit_children.push(
+                    commands
+                        .spawn((
+                            Transform::default(),
+                            CornerId(id),
+                            Mesh3d(unlit_parent.mesh.clone()),
+                            MeshMaterial3d(materials.add(StandardMaterial {
+                                base_color: color.into(),
+                                unlit: true,
+                                cull_mode: None,
+                                depth_bias: 1.0,
+                                double_sided: true,
+                                ..default()
+                            })),
+                            CheckerboardCornerUnlitSphere,
+                        ))
+                        .id(),
+                );
 
-                    id += 1;
-                }
+                id += 1;
             }
-
-            commands
-                .entity(checkerboard)
-                .add_children(&checkerboard_children);
-
-            commands
-                .entity(unlit_parent.parent)
-                .add_children(&unlit_children);
         }
+
+        commands
+            .entity(checkerboard)
+            .add_children(&checkerboard_children);
+
+        commands
+            .entity(unlit_parent.parent)
+            .add_children(&unlit_children);
     }
 }
 
 fn corners_gizmos(
     mut gizmos: Gizmos,
-    enabled: Option<Single<&CheckboxShowCheckerboardCornerGizmos, With<Checked>>>,
-    checkerboards: Query<(&Children, &Transform), With<CheckerboardSettings>>,
-    corners: Query<(&GlobalTransform, &CornerId)>,
+    enabled: Res<ShowCheckerboardCornerGizmos>,
+    checkerboards: Query<(&Children, &Transform), With<Checkerboard>>,
+    corners: Query<(&GlobalTransform, &CornerId), With<CheckerboardCornerGizmo>>,
 ) {
-    if enabled.is_none() {
+    if !enabled.0 {
         return;
     }
 
@@ -2260,93 +2203,32 @@ fn corners_gizmos(
     }
 }
 
-fn update_point_lights_from_sliders(
-    slider_point_x: Single<&SliderValue, With<SliderLightPointX>>,
-    slider_point_y: Single<&SliderValue, With<SliderLightPointY>>,
-    slider_point_z: Single<&SliderValue, With<SliderLightPointZ>>,
-
-    slider_point_r: Single<&SliderValue, With<SliderLightPointColorR>>,
-    slider_point_g: Single<&SliderValue, With<SliderLightPointColorG>>,
-    slider_point_b: Single<&SliderValue, With<SliderLightPointColorB>>,
-
-    mut q_point_light: Query<(&mut Transform, &mut PointLight)>,
-) {
-    for (mut transform, mut point_light) in &mut q_point_light {
-        transform.translation = Vec3::new(slider_point_x.0, slider_point_y.0, slider_point_z.0);
-
-        point_light.color =
-            Color::srgb_from_array([slider_point_r.0, slider_point_g.0, slider_point_b.0]);
-    }
-}
-
-fn update_directional_lights_from_sliders(
-    slider_dir_x: Single<&SliderValue, With<SliderLightDirectionX>>,
-    slider_dir_y: Single<&SliderValue, With<SliderLightDirectionY>>,
-    slider_dir_z: Single<&SliderValue, With<SliderLightDirectionZ>>,
-
-    slider_dir_r: Single<&SliderValue, With<SliderLightDirectionColorR>>,
-    slider_dir_g: Single<&SliderValue, With<SliderLightDirectionColorG>>,
-    slider_dir_b: Single<&SliderValue, With<SliderLightDirectionColorB>>,
-
-    mut q_directional_light: Query<(&mut Transform, &mut DirectionalLight)>,
-) {
-    for (mut transform, mut dir_light) in &mut q_directional_light {
-        let direction =
-            Vec3::new(slider_dir_x.0, slider_dir_y.0, slider_dir_z.0).normalize_or_zero();
-        transform.rotation = Quat::from_rotation_arc(Vec3::Y, direction);
-
-        dir_light.color = Color::srgb_from_array([slider_dir_r.0, slider_dir_g.0, slider_dir_b.0]);
-    }
-}
-
-fn set_ui_debug_options(
-    mut opts: ResMut<UiDebugOptions>,
-    checkbox_ui_debug_enabled: Option<Single<&CheckboxUiDebugEnabled, With<Checked>>>,
-    checkbox_ui_debug_show_hidden: Option<Single<&CheckboxUiDebugShowHidden, With<Checked>>>,
-    checkbox_ui_debug_show_clipped: Option<Single<&CheckboxUiDebugShowClipped, With<Checked>>>,
-) {
-    opts.enabled = checkbox_ui_debug_enabled.is_some();
-    opts.show_clipped = checkbox_ui_debug_show_clipped.is_some();
-    opts.show_hidden = checkbox_ui_debug_show_hidden.is_some();
-}
-
-fn set_picking_debug(
-    mut mode: ResMut<DebugPickingMode>,
-    radio_disabled: Option<Single<&RadioPickingDebugDisabled, With<Checked>>>,
-    radio_normal: Option<Single<&RadioPickingDebugNormal, With<Checked>>>,
-    radio_noisy: Option<Single<&RadioPickingDebugNoisy, With<Checked>>>,
-) {
-    if radio_disabled.is_some() {
-        *mode = DebugPickingMode::Disabled;
-    } else if radio_normal.is_some() {
-        *mode = DebugPickingMode::Normal;
-    } else if radio_noisy.is_some() {
-        *mode = DebugPickingMode::Noisy;
-    }
-}
-
 // Make the decal always cover the entire checkerboard
 fn update_decal_transform(
-    mut decal: Single<&mut Transform, (With<ForwardDecal>, Without<CheckerboardSettings>)>,
-    checkerboard: Single<&Transform, With<CheckerboardSettings>>,
-    settings: Res<CheckerboardSettings>,
+    mut decal: Single<&mut Transform, (With<ForwardDecal>, Without<Checkerboard>)>,
+    checkerboard: Single<(&Transform, &Checkerboard)>,
 ) {
+    let (transform, settings) = *checkerboard;
+
     **decal = Transform {
         scale: Vec3::new(
             settings.square_size * settings.cols as f32,
             1.0,
             settings.square_size * settings.rows as f32,
         ),
-        ..**checkerboard
+        ..*transform
     };
 }
 
 fn unlit_corner_spheres(
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
-    enabled: Option<Single<&CheckboxShowCheckerboardCornerViewportSpheres, With<Checked>>>,
-    checkerboards: Query<&Children, With<CheckerboardSettings>>,
+    enabled: Res<ShowCheckerboardCornerViewportSpheres>,
+    checkerboards: Query<&Children, With<Checkerboard>>,
     mut corners: Query<(&GlobalTransform, &CornerId), Without<Gizmo>>,
-    mut unlits: Query<(&mut Transform, &mut Visibility, &CornerId), With<Mesh3d>>,
+    mut unlits: Query<
+        (&mut Transform, &mut Visibility, &CornerId),
+        With<CheckerboardCornerUnlitSphere>,
+    >,
 ) {
     for checkerboard_children in &checkerboards {
         let num_corners = checkerboard_children.len();
@@ -2357,7 +2239,7 @@ fn unlit_corner_spheres(
         for (child, (mut unlit_transform, mut unlit_visibility, _gizmo_id)) in
             zip(checkerboard_children.iter(), unlits.iter_mut())
         {
-            *unlit_visibility = if enabled.is_some() {
+            *unlit_visibility = if enabled.0 {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
