@@ -19,7 +19,6 @@
 //  - Can custom projections help?
 //  - How do we ensure our perfect information is still correct?
 // - Hover zoom thing
-// - Axes checkmark
 // - Camera distance to checkerboard center text display
 // - Decal scale aspect ratio independent of checkerboard aspect ratio
 
@@ -109,7 +108,9 @@ const UI_TEXT_BIG: f32 = 16.0;
 const UI_ROW_GAP_PER_TAB: f32 = 8.0;
 
 #[derive(Component)]
-struct ShowAxes;
+struct ShowAxes {
+    enabled: bool,
+}
 
 #[derive(Component)]
 struct UiTabNode;
@@ -254,9 +255,11 @@ fn main() {
         .run();
 }
 
-fn draw_axes(mut gizmos: Gizmos, query: Query<&Transform, With<ShowAxes>>) {
-    for &transform in &query {
-        gizmos.axes(transform, 1.0);
+fn draw_axes(mut gizmos: Gizmos, query: Query<(&Transform, &ShowAxes)>) {
+    for (&transform, &ShowAxes { enabled }) in &query {
+        if enabled {
+            gizmos.axes(transform, 1.0);
+        }
     }
 }
 
@@ -303,7 +306,7 @@ fn setup(
             perceptual_roughness: 0.1,
             ..default()
         })),
-        ShowAxes,
+        ShowAxes { enabled: false },
         checkerboard,
     ));
 
@@ -1783,7 +1786,7 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                     slider(
                         SliderProps {
                             min: 0.3,
-                            value: 0.61,
+                            value: 1.43,
                             max: 10.0,
                             on_change: slider_component::<DepthOfField, ()>(
                                 commands,
@@ -1954,6 +1957,18 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                 },
                 Checked,
                 Spawn((Text::new("Gizmos enabled"), ThemedText))
+            ),
+            checkbox(
+                CheckboxProps {
+                    on_change: checkbox_component::<ShowAxes, ()>(
+                        commands,
+                        |show_axes, checked| {
+                            show_axes.enabled = checked;
+                        }
+                    )
+                },
+                (),
+                Spawn((Text::new("Draw Axes"), ThemedText))
             ),
             checkbox(
                 CheckboxProps {
