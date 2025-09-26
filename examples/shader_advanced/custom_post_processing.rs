@@ -9,6 +9,7 @@
 use bevy::{
     core_pipeline::{
         core_3d::graph::{Core3d, Node3d},
+        prepass::{DepthPrepass, ViewPrepassTextures},
         FullscreenShader,
     },
     ecs::query::QueryItem,
@@ -30,6 +31,7 @@ use bevy::{
         RenderApp, RenderStartup,
     },
 };
+use bevy_render::render_resource::binding_types::texture_depth_2d_multisampled;
 
 /// This example uses a shader source file from the assets subdirectory
 const SHADER_ASSET_PATH: &str = "shaders/post_processing.wgsl";
@@ -123,6 +125,7 @@ impl ViewNode for PostProcessNode {
         // As there could be multiple post processing components sent to the GPU (one per camera),
         // we need to get the index of the one that is associated with the current view.
         &'static DynamicUniformIndex<PostProcessSettings>,
+        &'static ViewPrepassTextures,
     );
 
     // Runs the node logic
@@ -136,7 +139,9 @@ impl ViewNode for PostProcessNode {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext,
-        (view_target, _post_process_settings, settings_index): QueryItem<Self::ViewQuery>,
+        (view_target, _post_process_settings, settings_index, prepass_textures): QueryItem<
+            Self::ViewQuery,
+        >,
         world: &World,
     ) -> Result<(), NodeRunError> {
         // Get the pipeline resource that contains the global data we need
@@ -151,6 +156,11 @@ impl ViewNode for PostProcessNode {
         // Get the pipeline from the cache
         let Some(pipeline) = pipeline_cache.get_render_pipeline(post_process_pipeline.pipeline_id)
         else {
+            return Ok(());
+        };
+
+        let Some(depth_view) = prepass_textures.depth_view() else {
+            warn!("no depth prepass");
             return Ok(());
         };
 
@@ -184,9 +194,11 @@ impl ViewNode for PostProcessNode {
                 // Make sure to use the source view
                 post_process.source,
                 // Use the sampler created for the pipeline
-                &post_process_pipeline.sampler,
+                &post_process_pipeline.texture_sampler,
                 // Set the settings binding
                 settings_binding.clone(),
+                depth_view,
+                &post_process_pipeline.depth_sampler,
             )),
         );
 
@@ -223,7 +235,8 @@ impl ViewNode for PostProcessNode {
 #[derive(Resource)]
 struct PostProcessPipeline {
     layout: BindGroupLayout,
-    sampler: Sampler,
+    texture_sampler: Sampler,
+    depth_sampler: Sampler,
     pipeline_id: CachedRenderPipelineId,
 }
 
@@ -247,11 +260,14 @@ fn init_post_process_pipeline(
                 sampler(SamplerBindingType::Filtering),
                 // The settings uniform that will control the effect
                 uniform_buffer::<PostProcessSettings>(true),
+                texture_depth_2d_multisampled(),
+                sampler(SamplerBindingType::Filtering),
             ),
         ),
     );
     // We can create the sampler here since it won't change at runtime and doesn't depend on the view
-    let sampler = render_device.create_sampler(&SamplerDescriptor::default());
+    let texture_sampler = render_device.create_sampler(&SamplerDescriptor::default());
+    let depth_sampler = render_device.create_sampler(&SamplerDescriptor::default());
 
     // Get the shader handle
     let shader = asset_server.load(SHADER_ASSET_PATH);
@@ -272,14 +288,16 @@ fn init_post_process_pipeline(
                     blend: None,
                     write_mask: ColorWrites::ALL,
                 })],
+                shader_defs: vec!["DEPTH_PREPASS".into(), "MULTISAMPLED".into()],
                 ..default()
             }),
             ..default()
         });
     commands.insert_resource(PostProcessPipeline {
         layout,
-        sampler,
         pipeline_id,
+        texture_sampler,
+        depth_sampler,
     });
 }
 
@@ -287,9 +305,9 @@ fn init_post_process_pipeline(
 #[derive(Component, Default, Clone, Copy, ExtractComponent, ShaderType)]
 struct PostProcessSettings {
     intensity: f32,
-    // WebGL2 structs must be 16 byte aligned.
-    #[cfg(feature = "webgl2")]
-    _webgl2_padding: Vec3,
+    world_from_clip: Mat4,
+    viewport: Vec4,
+    camera_pos: Vec3,
 }
 
 /// Set up a simple 3D scene
@@ -297,15 +315,17 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     // camera
     commands.spawn((
         Camera3d::default(),
-        Transform::from_translation(Vec3::new(0.0, 0.0, 5.0)).looking_at(Vec3::default(), Vec3::Y),
+        Transform::from_translation(Vec3::new(0.0, 0.0, 2.0)).looking_at(Vec3::default(), Vec3::Y),
         Camera {
             clear_color: Color::WHITE.into(),
             ..default()
         },
+        DepthPrepass,
         // Add the setting to the camera.
         // This component is also used to determine on which camera to run the post processing effect.
         PostProcessSettings {
@@ -318,9 +338,19 @@ fn setup(
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::default())),
         MeshMaterial3d(materials.add(Color::srgb(0.8, 0.7, 0.6))),
-        Transform::from_xyz(0.0, 0.5, 0.0),
+        Transform::from_xyz(-1.0, 0.0, 0.0),
         Rotates,
     ));
+
+    commands.spawn((
+        SceneRoot(
+            asset_server
+                .load(GltfAssetLabel::Scene(0).from_asset("models/FlightHelmet/FlightHelmet.gltf")),
+        ),
+        Rotates,
+        Transform::from_xyz(1.0, 0.0, 0.0),
+    ));
+
     // light
     commands.spawn(DirectionalLight {
         illuminance: 1_000.,
@@ -340,8 +370,11 @@ fn rotate(time: Res<Time>, mut query: Query<&mut Transform, With<Rotates>>) {
 }
 
 // Change the intensity over time to show that the effect is controlled from the main world
-fn update_settings(mut settings: Query<&mut PostProcessSettings>, time: Res<Time>) {
-    for mut setting in &mut settings {
+fn update_settings(
+    mut settings: Query<(&Camera, &GlobalTransform, &mut PostProcessSettings)>,
+    time: Res<Time>,
+) {
+    for (camera, transform, mut setting) in &mut settings {
         let mut intensity = ops::sin(time.elapsed_secs());
         // Make it loop periodically
         intensity = ops::sin(intensity);
@@ -353,5 +386,20 @@ fn update_settings(mut settings: Query<&mut PostProcessSettings>, time: Res<Time
         // Set the intensity.
         // This will then be extracted to the render world and uploaded to the GPU automatically by the [`UniformComponentPlugin`]
         setting.intensity = intensity;
+
+        let viewport_xy = camera.physical_viewport_rect().unwrap().min;
+        let viewport_zw = camera.physical_viewport_size().unwrap();
+
+        setting.viewport = UVec4::from((viewport_xy, viewport_zw)).as_vec4();
+
+        let clip_from_view = camera.clip_from_view();
+
+        let view_from_clip = clip_from_view.inverse();
+        let world_from_view = transform.to_matrix();
+
+        setting.world_from_clip = world_from_view * view_from_clip;
+        setting.camera_pos = transform.translation();
+
+        info!("viewport: {:#?}", setting.viewport);
     }
 }
