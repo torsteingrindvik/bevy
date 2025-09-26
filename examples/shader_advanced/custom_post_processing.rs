@@ -399,7 +399,5 @@ fn update_settings(
 
         setting.world_from_clip = world_from_view * view_from_clip;
         setting.camera_pos = transform.translation();
-
-        info!("viewport: {:#?}", setting.viewport);
     }
 }
