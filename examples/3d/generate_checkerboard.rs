@@ -7,8 +7,6 @@
 //   - Noise
 //   - Solarisation (?)
 //   - Color jittering (?)
-// - Try using world-space corner positions, display in viewport via gizmos
-//  - Gizmos are not it. 2d gizmos are not 2d.
 // - "Settled" component: For all things with transforms, mark as settled when not moving for e.g. 3 frames
 // - Host online wasm
 // - Another render target: Shows the scene from afar such that we can see gizmos for lights etc., maybe orthographic?
@@ -18,7 +16,6 @@
 // - Intrinsics with distortion model
 //  - Can custom projections help?
 //  - How do we ensure our perfect information is still correct?
-// - Hover zoom thing
 // - Camera distance to checkerboard center text display
 // - Decal scale aspect ratio independent of checkerboard aspect ratio
 
@@ -67,6 +64,7 @@ use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
+use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{
     Activate, Callback, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
@@ -180,6 +178,15 @@ enum RenderResolution {
     Res480p,
 }
 
+#[derive(Debug, Component)]
+struct SceneImageNodeMarker;
+
+#[derive(Debug, Component)]
+struct ZoomImageNodeMarker;
+
+#[derive(Debug, Component)]
+struct ZoomSize(f32);
+
 fn main() {
     App::new()
         .add_plugins((
@@ -252,6 +259,9 @@ fn main() {
                 .chain(),
         )
         .add_systems(Last, corners_gizmos)
+        .add_observer(pointer_move_over_scene_image)
+        .add_observer(pointer_scroll_over_scene_image)
+        .add_observer(pointer_move_or_scroll_over_scene_image)
         .run();
 }
 
@@ -396,6 +406,7 @@ fn setup(
     commands.spawn((DirectionalLight::default(), camera_and_light_transform));
 
     let root = root_node(&mut commands, ui_camera, &scene_image);
+
     commands.spawn(root);
 
     let unlit_parent = commands
@@ -489,7 +500,7 @@ fn create_checkerboard(rows: usize, cols: usize) -> Mesh {
 }
 
 fn button_selector(clicked: In<Activate>, mut buttons: Query<(Entity, &mut ButtonVariant)>) {
-    info!("Clicked! {clicked:?}");
+    debug!("Clicked! {clicked:?}");
     for (e, mut variant) in &mut buttons {
         if clicked.0 .0 == e {
             *variant = ButtonVariant::Primary;
@@ -883,7 +894,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
             commands.entity(radio_button_entity).insert(Checked);
 
             for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-                info!("sibling of {radio_button_entity}: {sibling_radio_button}");
+                debug!("sibling of {radio_button_entity}: {sibling_radio_button}");
                 commands.entity(sibling_radio_button).remove::<Checked>();
             }
 
@@ -2096,6 +2107,88 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
     )
 }
 
+/// Event relating only to [`SceneImageNodeMarker`]
+#[derive(Debug, Event)]
+enum MoveOrScroll {
+    Scroll {
+        diff: f32,
+    },
+
+    Move {
+        /// Moved to position over [`SceneImageNodeMarker`].
+        /// In normalized [0., 1.] range
+        pos: Vec2,
+    },
+}
+
+fn pointer_move_or_scroll_over_scene_image(
+    e: On<MoveOrScroll>,
+    mut last_pos: Local<Vec2>,
+    main: Single<&ImageNodeSize, With<SceneImageNodeMarker>>,
+    zoomed: Single<
+        (&mut ImageNode, &mut ZoomSize),
+        (With<ZoomImageNodeMarker>, Without<SceneImageNodeMarker>),
+    >,
+) {
+    let (mut zoom_node, mut zoom_size) = zoomed.into_inner();
+
+    match e.event() {
+        MoveOrScroll::Scroll { diff } => {
+            zoom_size.0 += *diff;
+            zoom_size.0 = zoom_size.0.clamp(5., 400.)
+        }
+        MoveOrScroll::Move { pos } => *last_pos = *pos,
+    }
+
+    // The desired px size of the zoomed area
+    let zoom = Vec2::new(16. / 9., 1.) * zoom_size.0;
+
+    // Px size of the main scene image
+    let texture_size = main.size().as_vec2();
+
+    // Get the pointer position in the scene image coordinates.
+    // Clamp to within a border of half the desired zoom size to avoid
+    // warp effects close to borders
+    let pointer_pos = (texture_size * *last_pos).clamp(zoom / 2., texture_size - zoom / 2.);
+
+    let rect = Rect {
+        min: pointer_pos - zoom / 2.,
+        max: pointer_pos + zoom / 2.,
+    };
+
+    debug!(
+        "{:?} -> {pointer_pos:?} -> {rect:?}, zoom size = {:?}",
+        *last_pos, zoom_size.0
+    );
+
+    zoom_node.rect = Some(rect);
+}
+
+fn pointer_move_over_scene_image(
+    e: On<Pointer<Move>>,
+    main: Single<Entity, With<SceneImageNodeMarker>>,
+    mut commands: Commands,
+) {
+    if *main == e.event().entity {
+        let normalized = (e.event().hit.position.unwrap_or_default().truncate() + Vec2::splat(0.5))
+            .clamp(Vec2::ZERO, Vec2::ONE);
+
+        commands.trigger(MoveOrScroll::Move { pos: normalized });
+    }
+}
+
+fn pointer_scroll_over_scene_image(
+    e: On<Pointer<Scroll>>,
+    main: Single<Entity, With<SceneImageNodeMarker>>,
+    mut commands: Commands,
+) {
+    if *main == e.event().entity {
+        let diff = e.event().event.y * -5.;
+
+        commands.trigger(MoveOrScroll::Scroll { diff });
+    }
+}
+
 fn root_node(
     commands: &mut Commands,
     camera_entity: Entity,
@@ -2141,8 +2234,37 @@ fn root_node(
                 ImageNode::new(scene_image.clone()),
                 Node {
                     width: percent(70),
+                    aspect_ratio: Some(16. / 9.),
                     ..default()
                 },
+                SceneImageNodeMarker,
+            ),
+            (
+                ImageNode::new(scene_image.clone()).with_rect(Rect {
+                    min: Vec2::new(100., 200.),
+                    max: Vec2::new(300., 300.)
+                }),
+                Node {
+                    height: px(200.),
+                    width: px(200. * 16. / 9.),
+                    position_type: PositionType::Absolute,
+                    right: px(16.),
+                    bottom: px(16.),
+                    aspect_ratio: Some(16. / 9.),
+                    ..default()
+                },
+                BorderRadius::new(
+                    // top left
+                    Val::Px(20.),
+                    // top right
+                    Val::Px(20.),
+                    // bottom right
+                    Val::Px(20.),
+                    // bottom left
+                    Val::Px(20.),
+                ),
+                ZoomImageNodeMarker,
+                ZoomSize(100.)
             )
         ],
     )
@@ -2221,7 +2343,7 @@ fn checkerboard_changed_add_corner_children(
     for (checkerboard, settings) in &checkerboards {
         let Checkerboard { rows, cols, .. } = *settings;
 
-        info!("making new corner position kids for {checkerboard}, settings: {rows}x{cols}",);
+        debug!("making new corner position kids for {checkerboard}, settings: {rows}x{cols}",);
 
         // Start over
         commands.entity(checkerboard).despawn_children();
