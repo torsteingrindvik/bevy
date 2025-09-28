@@ -16,8 +16,8 @@
 // - Intrinsics with distortion model
 //  - Can custom projections help?
 //  - How do we ensure our perfect information is still correct?
-// - Camera distance to checkerboard center text display
 // - Decal scale aspect ratio independent of checkerboard aspect ratio
+// - CI to publish to webpage
 
 // Scratchpad:
 //
@@ -100,6 +100,7 @@ use bevy_render::view::Hdr;
 // use crate::camera_controller::CameraController;
 use crate::camera_controller::CameraControllerPlugin;
 
+const UI_TEXT_MINI: f32 = 10.0;
 const UI_TEXT_SMALL: f32 = 12.0;
 const UI_TEXT_BIG: f32 = 16.0;
 
@@ -187,6 +188,9 @@ struct ZoomImageNodeMarker;
 #[derive(Debug, Component)]
 struct ZoomSize(f32);
 
+#[derive(Debug, Component)]
+struct CheckerboardDistanceToCamera;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -259,10 +263,24 @@ fn main() {
                 .chain(),
         )
         .add_systems(Last, corners_gizmos)
+        .add_systems(Update, update_distance_from_checkerboard_to_camera_text)
         .add_observer(pointer_move_over_scene_image)
         .add_observer(pointer_scroll_over_scene_image)
         .add_observer(pointer_move_or_scroll_over_scene_image)
         .run();
+}
+
+fn update_distance_from_checkerboard_to_camera_text(
+    mut text: Single<&mut Text, With<CheckerboardDistanceToCamera>>,
+    checkerboard: Single<&GlobalTransform, (With<Checkerboard>, With<Mesh3d>)>,
+    camera: Single<&GlobalTransform, (With<Camera3d>, Without<Checkerboard>)>,
+) {
+    let distance = checkerboard.translation().distance(camera.translation());
+
+    text.0 = format!(
+        "Checkerboard center distance to camera (mm): {:.1}",
+        distance * 1e3
+    );
 }
 
 fn draw_axes(mut gizmos: Gizmos, query: Query<(&Transform, &ShowAxes)>) {
@@ -852,6 +870,15 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                         SliderPrecision(2),
                     )
                 ]
+            ),
+            (
+                Node {
+                    padding: UiRect::top(px(8.)),
+                    ..default()
+                },
+                Text("".into()),
+                TextFont::from_font_size(UI_TEXT_MINI),
+                CheckerboardDistanceToCamera
             )
         ],
     )
