@@ -54,9 +54,7 @@ use bevy::camera::RenderTarget;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::dev_tools::picking_debug::{DebugPickingMode, DebugPickingPlugin};
-use bevy::feathers::controls::{
-    button, checkbox, radio, ButtonProps, ButtonVariant, CheckboxProps,
-};
+use bevy::feathers::controls::{button, checkbox, radio, ButtonProps, ButtonVariant};
 use bevy::feathers::theme::ThemedText;
 use bevy::math::Affine2;
 use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
@@ -67,7 +65,7 @@ use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{
-    Activate, Callback, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
+    observe, Activate, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
@@ -517,10 +515,10 @@ fn create_checkerboard(rows: usize, cols: usize) -> Mesh {
     .with_inserted_indices(Indices::U16(indices))
 }
 
-fn button_selector(clicked: In<Activate>, mut buttons: Query<(Entity, &mut ButtonVariant)>) {
-    debug!("Clicked! {clicked:?}");
+fn button_selector(activate: On<Activate>, mut buttons: Query<(Entity, &mut ButtonVariant)>) {
+    debug!("Clicked! {activate:?}");
     for (e, mut variant) in &mut buttons {
-        if clicked.0 .0 == e {
+        if activate.entity == e {
             *variant = ButtonVariant::Primary;
         } else {
             *variant = ButtonVariant::Normal;
@@ -528,65 +526,81 @@ fn button_selector(clicked: In<Activate>, mut buttons: Query<(Entity, &mut Butto
     }
 }
 
-fn slider_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
-    commands: &mut Commands,
-    use_with_new_value: impl Fn(&mut C, f32) + Send + Sync + 'static,
-) -> Callback<In<ValueChange<f32>>> {
-    Callback::System(commands.register_system(
-        move |change: In<ValueChange<f32>>,
-              mut commands: Commands,
-              mut component: Query<&mut C, F>| {
-            commands
-                .entity(change.source)
-                .insert(SliderValue(change.value));
+// fn slider_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
+//     commands: &mut Commands,
+//     use_with_new_value: impl Fn(&mut C, f32) + Send + Sync + 'static,
+// ) -> Callback<In<ValueChange<f32>>> {
+//     Callback::System(commands.register_system(
+//         move |change: In<ValueChange<f32>>,
+//               mut commands: Commands,
+//               mut component: Query<&mut C, F>| {
+//             commands
+//                 .entity(change.source)
+//                 .insert(SliderValue(change.value));
 
-            for mut c in &mut component {
-                use_with_new_value(&mut c, change.value);
-            }
-        },
-    ))
-}
+//             for mut c in &mut component {
+//                 use_with_new_value(&mut c, change.value);
+//             }
+//         },
+//     ))
+// }
 
-fn checkbox_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
-    commands: &mut Commands,
-    use_with_new_value: impl Fn(&mut C, bool) + Send + Sync + 'static,
-) -> Callback<In<ValueChange<bool>>> {
-    Callback::System(commands.register_system(
-        move |change: In<ValueChange<bool>>,
-              mut commands: Commands,
-              mut component: Query<&mut C, F>| {
-            if change.value {
-                commands.entity(change.source).insert(Checked);
-            } else {
-                commands.entity(change.source).remove::<Checked>();
-            };
+// fn checkbox_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
+//     commands: &mut Commands,
+//     use_with_new_value: impl Fn(&mut C, bool) + Send + Sync + 'static,
+// ) -> Callback<In<ValueChange<bool>>> {
+//     Callback::System(commands.register_system(
+//         move |change: In<ValueChange<bool>>,
+//               mut commands: Commands,
+//               mut component: Query<&mut C, F>| {
+//             if change.value {
+//                 commands.entity(change.source).insert(Checked);
+//             } else {
+//                 commands.entity(change.source).remove::<Checked>();
+//             };
 
-            for mut c in &mut component {
-                use_with_new_value(&mut c, change.value);
-            }
-        },
-    ))
-}
+//             for mut c in &mut component {
+//                 use_with_new_value(&mut c, change.value);
+//             }
+//         },
+//     ))
+// }
 
-fn checkbox_resource<R: Resource>(
-    commands: &mut Commands,
-    use_with_new_value: impl Fn(&mut R, bool) + Send + Sync + 'static,
-) -> Callback<In<ValueChange<bool>>> {
-    Callback::System(commands.register_system(
-        move |change: In<ValueChange<bool>>, mut commands: Commands, mut resource: ResMut<R>| {
-            if change.value {
-                commands.entity(change.source).insert(Checked);
-            } else {
-                commands.entity(change.source).remove::<Checked>();
-            };
+// fn checkbox_resource<R: Resource>(
+//     commands: &mut Commands,
+//     use_with_new_value: impl Fn(&mut R, bool) + Send + Sync + 'static,
+// ) -> Callback<In<ValueChange<bool>>> {
+//     Callback::System(commands.register_system(
+//         move |change: In<ValueChange<bool>>, mut commands: Commands, mut resource: ResMut<R>| {
+//             if change.value {
+//                 commands.entity(change.source).insert(Checked);
+//             } else {
+//                 commands.entity(change.source).remove::<Checked>();
+//             };
 
-            use_with_new_value(&mut resource, change.value);
-        },
-    ))
-}
+//             use_with_new_value(&mut resource, change.value);
+//         },
+//     ))
+// }
 
 fn tabs_node(commands: &mut Commands) -> impl Bundle + use<> {
-    let tabs_callback = commands.register_system(button_selector);
+    let button = |primary, tab_variant, tab_name| {
+        (
+            button(
+                ButtonProps {
+                    variant: if primary {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Normal
+                    },
+                    ..default()
+                },
+                tab_variant,
+                Spawn((Text::new(tab_name), ThemedText)),
+            ),
+            observe(button_selector),
+        )
+    };
 
     // Tabs
     (
@@ -601,76 +615,84 @@ fn tabs_node(commands: &mut Commands) -> impl Bundle + use<> {
             ..default()
         },
         children![
-            button(
-                ButtonProps {
-                    on_click: Callback::System(tabs_callback),
-                    variant: ButtonVariant::Primary,
-                    ..default()
-                },
-                UiTabVariant::Geometry,
-                Spawn((Text::new("Geometry"), ThemedText))
-            ),
-            button(
-                ButtonProps {
-                    on_click: Callback::System(tabs_callback),
-                    ..default()
-                },
-                UiTabVariant::Material,
-                Spawn((Text::new("Material"), ThemedText))
-            ),
-            button(
-                ButtonProps {
-                    on_click: Callback::System(tabs_callback),
-                    ..default()
-                },
-                UiTabVariant::Environment,
-                Spawn((Text::new("Environment"), ThemedText))
-            ),
-            button(
-                ButtonProps {
-                    on_click: Callback::System(tabs_callback),
-                    ..default()
-                },
-                UiTabVariant::Light,
-                Spawn((Text::new("Light"), ThemedText))
-            ),
-            button(
-                ButtonProps {
-                    on_click: Callback::System(tabs_callback),
-                    ..default()
-                },
-                UiTabVariant::Camera,
-                Spawn((Text::new("Camera"), ThemedText))
-            ),
-            button(
-                ButtonProps {
-                    on_click: Callback::System(tabs_callback),
-                    ..default()
-                },
-                UiTabVariant::Debug,
-                Spawn((Text::new("Debug"), ThemedText))
-            ),
+            button(true, UiTabVariant::Geometry, "Geometry"),
+            button(false, UiTabVariant::Material, "Material"),
+            button(false, UiTabVariant::Environment, "Environment"),
+            button(false, UiTabVariant::Light, "Light"),
+            button(false, UiTabVariant::Camera, "Camera"),
+            button(false, UiTabVariant::Debug, "Debug"),
+            // (
+            //     button(
+            //         ButtonProps {
+            //             variant: ButtonVariant::Primary,
+            //             ..default()
+            //         },
+            //         UiTabVariant::Geometry,
+            //         Spawn((Text::new("Geometry"), ThemedText))
+            //     ),
+            //     observe(button_selector)
+            // ),
+            // (
+            //     button(
+            //         ButtonProps::default(),
+            //         UiTabVariant::Material,
+            //         Spawn((Text::new("Material"), ThemedText))
+            //     ),
+            //     observe(button_selector)
+            // ),
+            // (
+            //     button(
+            //         ButtonProps::default(),
+            //         UiTabVariant::Environment,
+            //         Spawn((Text::new("Environment"), ThemedText))
+            //     ),
+            //     observe(button_selector)
+            // ),
+            // (
+            //     button(
+            //         ButtonProps::default(),
+            //         UiTabVariant::Light,
+            //         Spawn((Text::new("Light"), ThemedText))
+            //     ),
+            //     observe(button_selector)
+            // ),
+            // (
+            //     button(
+            //         ButtonProps::default(),
+            //         UiTabVariant::Camera,
+            //         Spawn((Text::new("Camera"), ThemedText))
+            //     ),
+            //     observe(button_selector)
+            // ),
+            // (
+            //     button(
+            //         ButtonProps::default(),
+            //         UiTabVariant::Debug,
+            //         Spawn((Text::new("Debug"), ThemedText))
+            //     ),
+            //     observe(button_selector)
+            // ),
         ],
     )
 }
 
 fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
-    fn use_transform(
-        commands: &mut Commands,
-        use_with_new_value: impl Fn(&mut Transform, f32) + Send + Sync + 'static,
-    ) -> Callback<In<ValueChange<f32>>> {
-        Callback::System(commands.register_system(
-            move |change: In<ValueChange<f32>>,
-                  mut commands: Commands,
-                  mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-                commands
-                    .entity(change.source)
-                    .insert(SliderValue(change.value));
+    // fn use_transform(
+    //     commands: &mut Commands,
+    //     use_with_new_value: impl Fn(&mut Transform, f32) + Send + Sync + 'static,
+    // ) -> Callback<In<ValueChange<f32>>> {
+    //     Callback::System(commands.register_system(
+    //         move |change: In<ValueChange<f32>>,
+    //               mut commands: Commands,
+    //               mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+    //             commands
+    //                 .entity(change.source)
+    //                 .insert(SliderValue(change.value));
 
-                use_with_new_value(&mut checkerboard, change.value);
-            },
-        ))
-    }
+    //             use_with_new_value(&mut checkerboard, change.value);
+    //         },
+    //     ))
+    // }
 
     // Checkerboard settings node
     (
@@ -698,12 +720,12 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 2.0,
                     value: 11.0,
                     max: 20.0,
-                    on_change: slider_component::<Checkerboard, ()>(
-                        commands,
-                        |checkerboard, value| {
-                            checkerboard.rows = value as _;
-                        }
-                    ),
+                    // on_change: slider_component::<Checkerboard, ()>(
+                    //     commands,
+                    //     |checkerboard, value| {
+                    //         checkerboard.rows = value as _;
+                    //     }
+                    // ),
                 },
                 SliderPrecision(0),
             ),
@@ -716,12 +738,12 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 2.0,
                     value: 10.0,
                     max: 20.0,
-                    on_change: slider_component::<Checkerboard, ()>(
-                        commands,
-                        |checkerboard, value| {
-                            checkerboard.cols = value as _;
-                        }
-                    ),
+                    // on_change: slider_component::<Checkerboard, ()>(
+                    //     commands,
+                    //     |checkerboard, value| {
+                    //         checkerboard.cols = value as _;
+                    //     }
+                    // ),
                 },
                 SliderPrecision(0),
             ),
@@ -734,13 +756,13 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 5.0,
                     value: 78.0,
                     max: 100.0,
-                    on_change: slider_component::<Checkerboard, ()>(
-                        commands,
-                        |checkerboard, value| {
-                            // mm to meters
-                            checkerboard.square_size = value * 1e-3;
-                        }
-                    ),
+                    // on_change: slider_component::<Checkerboard, ()>(
+                    //     commands,
+                    //     |checkerboard, value| {
+                    //         // mm to meters
+                    //         checkerboard.square_size = value * 1e-3;
+                    //     }
+                    // ),
                 },
                 SliderPrecision(0),
             ),
@@ -768,7 +790,7 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: -2.0,
                             value: 0.0,
                             max: 2.0,
-                            on_change: use_transform(commands, |t, value| t.translation.x = value),
+                            // on_change: use_transform(commands, |t, value| t.translation.x = value),
                         },
                         SliderPrecision(2),
                     ),
@@ -781,7 +803,7 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: -2.0,
                             value: 0.0,
                             max: 2.0,
-                            on_change: use_transform(commands, |t, value| t.translation.y = value),
+                            // on_change: use_transform(commands, |t, value| t.translation.y = value),
                         },
                         SliderPrecision(2),
                     ),
@@ -794,7 +816,7 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: -2.0,
                             value: 0.0,
                             max: 2.0,
-                            on_change: use_transform(commands, |t, value| t.translation.z = value),
+                            // on_change: use_transform(commands, |t, value| t.translation.z = value),
                         },
                         SliderPrecision(2),
                     ),
@@ -829,10 +851,10 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: -90.0,
                             value: 0.0,
                             max: 90.0,
-                            on_change: use_transform(commands, |t, x| {
-                                let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                                t.rotation = Quat::from_euler(EulerRot::XYZEx, x.to_radians(), y, z)
-                            }),
+                            // on_change: use_transform(commands, |t, x| {
+                            //     let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                            //     t.rotation = Quat::from_euler(EulerRot::XYZEx, x.to_radians(), y, z)
+                            // }),
                             ..default()
                         },
                         SliderPrecision(2),
@@ -846,10 +868,10 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: -90.0,
                             value: 0.0,
                             max: 90.0,
-                            on_change: use_transform(commands, |t, y| {
-                                let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                                t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y.to_radians(), z)
-                            }),
+                            // on_change: use_transform(commands, |t, y| {
+                            //     let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                            //     t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y.to_radians(), z)
+                            // }),
                         },
                         SliderPrecision(2),
                     ),
@@ -862,10 +884,10 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: -90.0,
                             value: 0.0,
                             max: 90.0,
-                            on_change: use_transform(commands, |t, z| {
-                                let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
-                                t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, z.to_radians())
-                            }),
+                            // on_change: use_transform(commands, |t, z| {
+                            //     let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
+                            //     t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, z.to_radians())
+                            // }),
                         },
                         SliderPrecision(2),
                     )
@@ -885,26 +907,26 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
 }
 
 fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
-    fn use_material<M: Asset + Material, C: Component>(
-        commands: &mut Commands,
-        use_with_new_value: impl Fn(&mut M, f32) + Send + Sync + 'static,
-    ) -> Callback<In<ValueChange<f32>>> {
-        Callback::System(commands.register_system(
-            move |change: In<ValueChange<f32>>,
-                  mut commands: Commands,
-                  mut materials: ResMut<Assets<M>>,
-                  material: Single<&mut MeshMaterial3d<M>, With<C>>| {
-                commands
-                    .entity(change.source)
-                    .insert(SliderValue(change.value));
+    // fn use_material<M: Asset + Material, C: Component>(
+    //     commands: &mut Commands,
+    //     use_with_new_value: impl Fn(&mut M, f32) + Send + Sync + 'static,
+    // ) -> Callback<In<ValueChange<f32>>> {
+    //     Callback::System(commands.register_system(
+    //         move |change: In<ValueChange<f32>>,
+    //               mut commands: Commands,
+    //               mut materials: ResMut<Assets<M>>,
+    //               material: Single<&mut MeshMaterial3d<M>, With<C>>| {
+    //             commands
+    //                 .entity(change.source)
+    //                 .insert(SliderValue(change.value));
 
-                let handle = material.0.clone();
-                let mut material = materials.get_mut(&handle).unwrap();
+    //             let handle = material.0.clone();
+    //             let mut material = materials.get_mut(&handle).unwrap();
 
-                use_with_new_value(&mut material, change.value);
-            },
-        ))
-    }
+    //             use_with_new_value(&mut material, change.value);
+    //         },
+    //     ))
+    // }
 
     let radio_check = commands.register_system(
         |ent: In<Activate>,
@@ -917,7 +939,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
          radio_decal: Query<&DecalTexture, With<RadioButton>>,
          mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
          mut commands: Commands| {
-            let radio_button_entity = ent.0 .0;
+            let radio_button_entity = ent.0.entity;
             commands.entity(radio_button_entity).insert(Checked);
 
             for sibling_radio_button in child.iter_siblings(radio_button_entity) {
@@ -962,10 +984,10 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.9,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, Checkerboard>(
-                        commands,
-                        |material, value| { material.metallic = value }
-                    )
+                    // on_change: use_material::<StandardMaterial, Checkerboard>(
+                    //     commands,
+                    //     |material, value| { material.metallic = value }
+                    // )
                 },
                 SliderPrecision(2),
             ),
@@ -978,10 +1000,10 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.1,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, Checkerboard>(
-                        commands,
-                        |material, value| material.perceptual_roughness = value
-                    )
+                    // on_change: use_material::<StandardMaterial, Checkerboard>(
+                    //     commands,
+                    //     |material, value| material.perceptual_roughness = value
+                    // )
                 },
                 SliderPrecision(2),
             ),
@@ -994,10 +1016,10 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 1.0,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, Checkerboard>(
-                        commands,
-                        |material, value| material.clearcoat = value
-                    )
+                    // on_change: use_material::<StandardMaterial, Checkerboard>(
+                    //     commands,
+                    //     |material, value| material.clearcoat = value
+                    // )
                 },
                 SliderPrecision(2),
             ),
@@ -1010,10 +1032,10 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 0.5,
                     max: 1.0,
-                    on_change: use_material::<StandardMaterial, Checkerboard>(
-                        commands,
-                        |material, value| material.clearcoat_perceptual_roughness = value
-                    )
+                    // on_change: use_material::<StandardMaterial, Checkerboard>(
+                    //     commands,
+                    //     |material, value| material.clearcoat_perceptual_roughness = value
+                    // )
                 },
                 SliderPrecision(2),
             ),
@@ -1040,13 +1062,13 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.88,
                             max: 1.0,
-                            on_change: use_material::<StandardMaterial, Checkerboard>(
-                                commands,
-                                |material, value| {
-                                    let linear = material.base_color.to_linear();
-                                    material.base_color = linear.with_red(value).into();
-                                }
-                            )
+                            // on_change: use_material::<StandardMaterial, Checkerboard>(
+                            //     commands,
+                            //     |material, value| {
+                            //         let linear = material.base_color.to_linear();
+                            //         material.base_color = linear.with_red(value).into();
+                            //     }
+                            // )
                         },
                         SliderPrecision(2),
                     ),
@@ -1059,13 +1081,13 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.89,
                             max: 1.0,
-                            on_change: use_material::<StandardMaterial, Checkerboard>(
-                                commands,
-                                |material, value| {
-                                    let linear = material.base_color.to_linear();
-                                    material.base_color = linear.with_green(value).into();
-                                }
-                            )
+                            // on_change: use_material::<StandardMaterial, Checkerboard>(
+                            //     commands,
+                            //     |material, value| {
+                            //         let linear = material.base_color.to_linear();
+                            //         material.base_color = linear.with_green(value).into();
+                            //     }
+                            // )
                         },
                         SliderPrecision(2),
                     ),
@@ -1078,13 +1100,13 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.91,
                             max: 1.0,
-                            on_change: use_material::<StandardMaterial, Checkerboard>(
-                                commands,
-                                |material, value| {
-                                    let linear = material.base_color.to_linear();
-                                    material.base_color = linear.with_blue(value).into();
-                                }
-                            )
+                            // on_change: use_material::<StandardMaterial, Checkerboard>(
+                            //     commands,
+                            //     |material, value| {
+                            //         let linear = material.base_color.to_linear();
+                            //         material.base_color = linear.with_blue(value).into();
+                            //     }
+                            // )
                         },
                         SliderPrecision(2),
                     ),
@@ -1110,7 +1132,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     ..default()
                 },
                 RadioGroup {
-                    on_change: Callback::System(radio_check),
+                    // on_change: Callback::System(radio_check),
                 },
                 children![
                     radio(
@@ -1150,16 +1172,16 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.28,
                             max: 1.0,
-                            on_change: use_material::<
-                                ForwardDecalMaterial<StandardMaterial>,
-                                ForwardDecal,
-                            >(
-                                commands,
-                                |material, value| {
-                                    let linear = material.base.base_color.to_linear();
-                                    material.base.base_color = linear.with_red(value).into();
-                                }
-                            )
+                            // on_change: use_material::<
+                            //     ForwardDecalMaterial<StandardMaterial>,
+                            //     ForwardDecal,
+                            // >(
+                            //     commands,
+                            //     |material, value| {
+                            //         let linear = material.base.base_color.to_linear();
+                            //         material.base.base_color = linear.with_red(value).into();
+                            //     }
+                            // )
                         },
                         SliderPrecision(2),
                     ),
@@ -1172,16 +1194,16 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.23,
                             max: 1.0,
-                            on_change: use_material::<
-                                ForwardDecalMaterial<StandardMaterial>,
-                                ForwardDecal,
-                            >(
-                                commands,
-                                |material, value| {
-                                    let linear = material.base.base_color.to_linear();
-                                    material.base.base_color = linear.with_green(value).into();
-                                }
-                            )
+                            // on_change: use_material::<
+                            //     ForwardDecalMaterial<StandardMaterial>,
+                            //     ForwardDecal,
+                            // >(
+                            //     commands,
+                            //     |material, value| {
+                            //         let linear = material.base.base_color.to_linear();
+                            //         material.base.base_color = linear.with_green(value).into();
+                            //     }
+                            // )
                         },
                         SliderPrecision(2),
                     ),
@@ -1194,16 +1216,16 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.11,
                             max: 1.0,
-                            on_change: use_material::<
-                                ForwardDecalMaterial<StandardMaterial>,
-                                ForwardDecal,
-                            >(
-                                commands,
-                                |material, value| {
-                                    let linear = material.base.base_color.to_linear();
-                                    material.base.base_color = linear.with_blue(value).into();
-                                }
-                            )
+                            // on_change: use_material::<
+                            //     ForwardDecalMaterial<StandardMaterial>,
+                            //     ForwardDecal,
+                            // >(
+                            //     commands,
+                            //     |material, value| {
+                            //         let linear = material.base.base_color.to_linear();
+                            //         material.base.base_color = linear.with_blue(value).into();
+                            //     }
+                            // )
                         },
                         SliderPrecision(2),
                     ),
@@ -1212,16 +1234,16 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.57,
                             max: 1.0,
-                            on_change: use_material::<
-                                ForwardDecalMaterial<StandardMaterial>,
-                                ForwardDecal,
-                            >(
-                                commands,
-                                |material, value| {
-                                    let linear = material.base.base_color.to_linear();
-                                    material.base.base_color = linear.with_alpha(value).into();
-                                }
-                            )
+                            // on_change: use_material::<
+                            //     ForwardDecalMaterial<StandardMaterial>,
+                            //     ForwardDecal,
+                            // >(
+                            //     commands,
+                            //     |material, value| {
+                            //         let linear = material.base.base_color.to_linear();
+                            //         material.base.base_color = linear.with_alpha(value).into();
+                            //     }
+                            // )
                         },
                         SliderPrecision(2),
                     ),
@@ -1236,19 +1258,19 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.1,
                     value: 1.86,
                     max: 10.0,
-                    on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
-                        commands,
-                        |material, value| {
-                            let (_, angle, translation) =
-                                material.base.uv_transform.to_scale_angle_translation();
+                    // on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
+                    //     commands,
+                    //     |material, value| {
+                    //         let (_, angle, translation) =
+                    //             material.base.uv_transform.to_scale_angle_translation();
 
-                            material.base.uv_transform = Affine2::from_scale_angle_translation(
-                                Vec2::splat(value),
-                                angle,
-                                translation,
-                            );
-                        }
-                    )
+                    //         material.base.uv_transform = Affine2::from_scale_angle_translation(
+                    //             Vec2::splat(value),
+                    //             angle,
+                    //             translation,
+                    //         );
+                    //     }
+                    // )
                 },
                 SliderPrecision(2),
             ),
@@ -1261,19 +1283,19 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 86.0,
                     max: 360.0,
-                    on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
-                        commands,
-                        |material, value| {
-                            let (scale, _, translation) =
-                                material.base.uv_transform.to_scale_angle_translation();
+                    // on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
+                    //     commands,
+                    //     |material, value| {
+                    //         let (scale, _, translation) =
+                    //             material.base.uv_transform.to_scale_angle_translation();
 
-                            material.base.uv_transform = Affine2::from_scale_angle_translation(
-                                scale,
-                                value.to_radians(),
-                                translation,
-                            );
-                        }
-                    )
+                    //         material.base.uv_transform = Affine2::from_scale_angle_translation(
+                    //             scale,
+                    //             value.to_radians(),
+                    //             translation,
+                    //         );
+                    //     }
+                    // )
                 },
                 SliderPrecision(1),
             )
@@ -1307,9 +1329,9 @@ fn environment_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 7000.0,
                     max: 10000.0,
-                    on_change: slider_component::<Skybox, ()>(commands, |skybox, value| {
-                        skybox.brightness = value;
-                    }),
+                    // on_change: slider_component::<Skybox, ()>(commands, |skybox, value| {
+                    //     skybox.brightness = value;
+                    // }),
                 },
                 SliderPrecision(-3),
             ),
@@ -1322,12 +1344,12 @@ fn environment_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 0.0,
                     value: 300.0,
                     max: 10000.0,
-                    on_change: slider_component::<EnvironmentMapLight, ()>(
-                        commands,
-                        |envmap, value| {
-                            envmap.intensity = value;
-                        }
-                    ),
+                    // on_change: slider_component::<EnvironmentMapLight, ()>(
+                    //     commands,
+                    //     |envmap, value| {
+                    //         envmap.intensity = value;
+                    //     }
+                    // ),
                 },
                 SliderPrecision(-2),
             ),
@@ -1376,15 +1398,15 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 100.0,
                             max: 360.0,
-                            on_change: slider_component::<Transform, With<DirectionalLight>>(
-                                commands,
-                                |light_transform, value| {
-                                    let (_, y, z) =
-                                        light_transform.rotation.to_euler(EulerRot::XYZEx);
-                                    light_transform.rotation =
-                                        Quat::from_euler(EulerRot::XYZEx, value.to_radians(), y, z)
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<DirectionalLight>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         let (_, y, z) =
+                            //             light_transform.rotation.to_euler(EulerRot::XYZEx);
+                            //         light_transform.rotation =
+                            //             Quat::from_euler(EulerRot::XYZEx, value.to_radians(), y, z)
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1397,15 +1419,15 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 100.0,
                             max: 360.0,
-                            on_change: slider_component::<Transform, With<DirectionalLight>>(
-                                commands,
-                                |light_transform, value| {
-                                    let (x, _, z) =
-                                        light_transform.rotation.to_euler(EulerRot::XYZEx);
-                                    light_transform.rotation =
-                                        Quat::from_euler(EulerRot::XYZEx, x, value.to_radians(), z)
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<DirectionalLight>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         let (x, _, z) =
+                            //             light_transform.rotation.to_euler(EulerRot::XYZEx);
+                            //         light_transform.rotation =
+                            //             Quat::from_euler(EulerRot::XYZEx, x, value.to_radians(), z)
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1418,15 +1440,15 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 100.0,
                             max: 360.0,
-                            on_change: slider_component::<Transform, With<DirectionalLight>>(
-                                commands,
-                                |light_transform, value| {
-                                    let (x, y, _) =
-                                        light_transform.rotation.to_euler(EulerRot::XYZEx);
-                                    light_transform.rotation =
-                                        Quat::from_euler(EulerRot::XYZEx, x, y, value.to_radians())
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<DirectionalLight>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         let (x, y, _) =
+                            //             light_transform.rotation.to_euler(EulerRot::XYZEx);
+                            //         light_transform.rotation =
+                            //             Quat::from_euler(EulerRot::XYZEx, x, y, value.to_radians())
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2)
                     )
@@ -1452,12 +1474,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<DirectionalLight, ()>(
-                                commands,
-                                |light, value| {
-                                    light.color = light.color.to_linear().with_red(value).into();
-                                }
-                            ),
+                            // on_change: slider_component::<DirectionalLight, ()>(
+                            //     commands,
+                            //     |light, value| {
+                            //         light.color = light.color.to_linear().with_red(value).into();
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1470,12 +1492,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.1,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<DirectionalLight, ()>(
-                                commands,
-                                |light, value| {
-                                    light.color = light.color.to_linear().with_green(value).into();
-                                }
-                            ),
+                            // on_change: slider_component::<DirectionalLight, ()>(
+                            //     commands,
+                            //     |light, value| {
+                            //         light.color = light.color.to_linear().with_green(value).into();
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1488,12 +1510,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<DirectionalLight, ()>(
-                                commands,
-                                |light, value| {
-                                    light.color = light.color.to_linear().with_blue(value).into();
-                                }
-                            ),
+                            // on_change: slider_component::<DirectionalLight, ()>(
+                            //     commands,
+                            //     |light, value| {
+                            //         light.color = light.color.to_linear().with_blue(value).into();
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1522,12 +1544,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<Transform, With<PointLight>>(
-                                commands,
-                                |light_transform, value| {
-                                    light_transform.translation.x = value;
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<PointLight>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         light_transform.translation.x = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1540,12 +1562,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.1,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<Transform, With<PointLight>>(
-                                commands,
-                                |light_transform, value| {
-                                    light_transform.translation.y = value;
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<PointLight>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         light_transform.translation.y = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1558,12 +1580,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<Transform, With<PointLight>>(
-                                commands,
-                                |light_transform, value| {
-                                    light_transform.translation.z = value;
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<PointLight>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         light_transform.translation.z = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1589,12 +1611,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<PointLight, ()>(
-                                commands,
-                                |light, value| {
-                                    light.color = light.color.to_linear().with_red(value).into();
-                                }
-                            ),
+                            // on_change: slider_component::<PointLight, ()>(
+                            //     commands,
+                            //     |light, value| {
+                            //         light.color = light.color.to_linear().with_red(value).into();
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1607,12 +1629,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.1,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<PointLight, ()>(
-                                commands,
-                                |light, value| {
-                                    light.color = light.color.to_linear().with_green(value).into();
-                                }
-                            ),
+                            // on_change: slider_component::<PointLight, ()>(
+                            //     commands,
+                            //     |light, value| {
+                            //         light.color = light.color.to_linear().with_green(value).into();
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1625,12 +1647,12 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.8,
                             max: 1.0,
-                            on_change: slider_component::<PointLight, ()>(
-                                commands,
-                                |light, value| {
-                                    light.color = light.color.to_linear().with_blue(value).into();
-                                }
-                            ),
+                            // on_change: slider_component::<PointLight, ()>(
+                            //     commands,
+                            //     |light, value| {
+                            //         light.color = light.color.to_linear().with_blue(value).into();
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1669,7 +1691,7 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
          radio: Query<&RenderResolutionComponent>,
          mut render_res: ResMut<RenderResolution>,
          mut commands: Commands| {
-            let radio_button_entity = ent.0 .0;
+            let radio_button_entity = ent.0.entity;
             commands.entity(radio_button_entity).insert(Checked);
 
             for sibling_radio_button in child.iter_siblings(radio_button_entity) {
@@ -1716,12 +1738,12 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.43,
                             max: 3.0,
-                            on_change: slider_component::<Transform, With<Camera3d>>(
-                                commands,
-                                |light_transform, value| {
-                                    light_transform.translation.x = value;
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<Camera3d>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         light_transform.translation.x = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1734,12 +1756,12 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.1,
                             value: 0.81,
                             max: 3.0,
-                            on_change: slider_component::<Transform, With<Camera3d>>(
-                                commands,
-                                |light_transform, value| {
-                                    light_transform.translation.y = value;
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<Camera3d>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         light_transform.translation.y = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1752,12 +1774,12 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.0,
                             value: 0.01,
                             max: 3.0,
-                            on_change: slider_component::<Transform, With<Camera3d>>(
-                                commands,
-                                |light_transform, value| {
-                                    light_transform.translation.z = value;
-                                }
-                            ),
+                            // on_change: slider_component::<Transform, With<Camera3d>>(
+                            //     commands,
+                            //     |light_transform, value| {
+                            //         light_transform.translation.z = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1778,19 +1800,19 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                     min: 10.0,
                     value: 45.0,
                     max: 135.0,
-                    on_change: slider_component::<Projection, With<Camera3d>>(
-                        commands,
-                        |projection, value| {
-                            let perspective = match projection {
-                                Projection::Perspective(p) => p,
-                                _ => {
-                                    unimplemented!();
-                                }
-                            };
+                    // on_change: slider_component::<Projection, With<Camera3d>>(
+                    //     commands,
+                    //     |projection, value| {
+                    //         let perspective = match projection {
+                    //             Projection::Perspective(p) => p,
+                    //             _ => {
+                    //                 unimplemented!();
+                    //             }
+                    //         };
 
-                            perspective.fov = value.to_radians();
-                        }
-                    ),
+                    //         perspective.fov = value.to_radians();
+                    //     }
+                    // ),
                 },
                 SliderPrecision(1),
             ),
@@ -1810,10 +1832,12 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                         TextFont::from_font_size(UI_TEXT_BIG)
                     ),
                     checkbox(
-                        CheckboxProps {
-                            on_change: Callback::System(insert_or_remove_depth_of_field),
-                        },
-                        Checked,
+                        (
+                            // CheckboxProps {
+                            //     // on_change: Callback::System(insert_or_remove_depth_of_field),
+                            // },
+                            Checked
+                        ),
                         Spawn((Text::new("Enabled"), ThemedText))
                     ),
                     // Focal distance node
@@ -1826,12 +1850,12 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.3,
                             value: 1.43,
                             max: 10.0,
-                            on_change: slider_component::<DepthOfField, ()>(
-                                commands,
-                                |dof, value| {
-                                    dof.focal_distance = value;
-                                }
-                            ),
+                            // on_change: slider_component::<DepthOfField, ()>(
+                            //     commands,
+                            //     |dof, value| {
+                            //         dof.focal_distance = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1845,12 +1869,12 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 5.0,
                             value: 10.18,
                             max: 50.0,
-                            on_change: slider_component::<DepthOfField, ()>(
-                                commands,
-                                |dof, value| {
-                                    dof.sensor_height = value * 1e-3; // mm to meters
-                                }
-                            ),
+                            // on_change: slider_component::<DepthOfField, ()>(
+                            //     commands,
+                            //     |dof, value| {
+                            //         dof.sensor_height = value * 1e-3; // mm to meters
+                            //     }
+                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1864,12 +1888,12 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                             min: 0.1,
                             value: 2.5,
                             max: 3.0,
-                            on_change: slider_component::<DepthOfField, ()>(
-                                commands,
-                                |dof, value| {
-                                    dof.aperture_f_stops = value;
-                                }
-                            ),
+                            // on_change: slider_component::<DepthOfField, ()>(
+                            //     commands,
+                            //     |dof, value| {
+                            //         dof.aperture_f_stops = value;
+                            //     }
+                            // ),
                         },
                         SliderPrecision(1),
                     ),
@@ -1884,7 +1908,7 @@ fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
                     ..default()
                 },
                 RadioGroup {
-                    on_change: Callback::System(radios_set_render_resolution),
+                    // on_change: Callback::System(radios_set_render_resolution),
                 },
                 children![
                     (
@@ -1958,7 +1982,7 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
          radio: Query<&DebugPickingModeComponent>,
          mut picking_debug: ResMut<DebugPickingMode>,
          mut commands: Commands| {
-            let radio_button_entity = ent.0 .0;
+            let radio_button_entity = ent.0.entity;
             commands.entity(radio_button_entity).insert(Checked);
 
             for sibling_radio_button in child.iter_siblings(radio_button_entity) {
@@ -1987,48 +2011,53 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                 TextFont::from_font_size(UI_TEXT_BIG)
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_resource::<GizmoConfigStore>(commands, |store, checked| {
-                        let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
-                        config.enabled = checked;
-                    })
-                },
-                Checked,
+                (
+                    // CheckboxProps {
+                    //     // on_change: checkbox_resource::<GizmoConfigStore>(
+                    //     //     commands,
+                    //     //     |store, checked| {
+                    //     //         let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
+                    //     //         config.enabled = checked;
+                    //     //     }
+                    //     // )
+                    // },
+                    Checked
+                ),
                 Spawn((Text::new("Gizmos enabled"), ThemedText))
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_component::<ShowAxes, ()>(
-                        commands,
-                        |show_axes, checked| {
-                            show_axes.enabled = checked;
-                        }
-                    )
-                },
+                // CheckboxProps {
+                //     // on_change: checkbox_component::<ShowAxes, ()>(
+                //     //     commands,
+                //     //     |show_axes, checked| {
+                //     //         show_axes.enabled = checked;
+                //     //     }
+                //     // )
+                // },
                 (),
                 Spawn((Text::new("Draw Axes"), ThemedText))
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_resource::<ShowCheckerboardCornerGizmos>(
-                        commands,
-                        |show, checked| {
-                            show.0 = checked;
-                        }
-                    )
-                },
+                // CheckboxProps {
+                //     // on_change: checkbox_resource::<ShowCheckerboardCornerGizmos>(
+                //     //     commands,
+                //     //     |show, checked| {
+                //     //         show.0 = checked;
+                //     //     }
+                //     // )
+                // },
                 (),
                 Spawn((Text::new("Checkerboard corner world gizmos"), ThemedText))
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_resource::<ShowCheckerboardCornerViewportSpheres>(
-                        commands,
-                        |show, checked| {
-                            show.0 = checked;
-                        }
-                    )
-                },
+                // CheckboxProps {
+                //     // on_change: checkbox_resource::<ShowCheckerboardCornerViewportSpheres>(
+                //     //     commands,
+                //     //     |show, checked| {
+                //     //         show.0 = checked;
+                //     //     }
+                //     // )
+                // },
                 (),
                 Spawn((
                     Text::new("Checkerboard corner viewport spheres"),
@@ -2036,32 +2065,35 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                 ))
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_resource::<FpsOverlayConfig>(
-                        commands,
-                        |config, checked| {
-                            config.enabled = checked;
-                            config.frame_time_graph_config.enabled = checked;
-                        }
-                    )
-                },
+                // CheckboxProps {
+                //     // on_change: checkbox_resource::<FpsOverlayConfig>(
+                //     //     commands,
+                //     //     |config, checked| {
+                //     //         config.enabled = checked;
+                //     //         config.frame_time_graph_config.enabled = checked;
+                //     //     }
+                //     // )
+                // },
                 (),
                 Spawn((Text::new("Show FPS"), ThemedText))
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_component::<Window, With<PrimaryWindow>>(
-                        commands,
-                        |window, checked| {
-                            window.present_mode = if checked {
-                                PresentMode::AutoVsync
-                            } else {
-                                PresentMode::AutoNoVsync
-                            };
-                        }
-                    )
-                },
-                Checked,
+                (
+                    // CheckboxProps {
+                    //     // on_change: checkbox_component::<Window, With<PrimaryWindow>>(
+                    //     //     commands,
+                    //     //     |window, checked| {
+                    //     //         window.present_mode = if checked {
+                    //     //             PresentMode::AutoVsync
+                    //     //         } else {
+                    //     //             PresentMode::AutoNoVsync
+                    //     //         };
+                    //     //     }
+                    //     // )
+                    // },
+                    (),
+                    Checked
+                ),
                 Spawn((Text::new("Vsync"), ThemedText))
             ),
             // Picking
@@ -2073,7 +2105,7 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                     ..default()
                 },
                 RadioGroup {
-                    on_change: Callback::System(radios_set_picking_mode),
+                    // on_change: Callback::System(radios_set_picking_mode),
                 },
                 children![
                     (
@@ -2104,29 +2136,29 @@ fn debug_node(commands: &mut Commands) -> impl Bundle {
                 TextFont::from_font_size(UI_TEXT_BIG)
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
-                        opts.enabled = checked;
-                    })
-                },
+                // CheckboxProps {
+                //     // on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
+                //     //     opts.enabled = checked;
+                //     // })
+                // },
                 (),
                 Spawn((Text::new("Enabled"), ThemedText))
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
-                        opts.show_hidden = checked;
-                    })
-                },
+                // CheckboxProps {
+                //     // on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
+                //     //     opts.show_hidden = checked;
+                //     // })
+                // },
                 (),
                 Spawn((Text::new("Show hidden"), ThemedText))
             ),
             checkbox(
-                CheckboxProps {
-                    on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
-                        opts.show_clipped = checked;
-                    })
-                },
+                // CheckboxProps {
+                //     // on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
+                //     //     opts.show_clipped = checked;
+                //     // })
+                // },
                 (),
                 Spawn((Text::new("Show clipped"), ThemedText))
             )
