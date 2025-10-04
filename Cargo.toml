@@ -1112,9 +1112,11 @@ name = "generate_checkerboard"
 path = "examples/3d/generate_checkerboard.rs"
 doc-scrape-examples = true
 required-features = [
-  "experimental_bevy_feathers",
-  "pbr_multi_layer_material_textures",
-  "bevy_dev_tools",
+    "experimental_bevy_feathers",
+    "pbr_multi_layer_material_textures",
+    "bevy_ui_debug",
+    "jpeg",
+    "bevy_dev_tools"
 ]
 
 [package.metadata.example.generate_checkerboard]

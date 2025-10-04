@@ -56,6 +56,7 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::dev_tools::picking_debug::{DebugPickingMode, DebugPickingPlugin};
 use bevy::feathers::controls::{button, checkbox, radio, ButtonProps, ButtonVariant};
 use bevy::feathers::theme::ThemedText;
+use bevy::input::common_conditions::input_just_pressed;
 use bevy::math::Affine2;
 use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
 use bevy::platform::collections::HashMap;
@@ -189,6 +190,13 @@ struct ZoomSize(f32);
 #[derive(Debug, Component)]
 struct CheckerboardDistanceToCamera;
 
+#[derive(Copy, Clone, Debug, PartialEq, EntityEvent)]
+struct ActualChange<T> {
+    #[event_target]
+    source: Entity,
+    value: T,
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -262,10 +270,36 @@ fn main() {
         )
         .add_systems(Last, corners_gizmos)
         .add_systems(Update, update_distance_from_checkerboard_to_camera_text)
+        .add_systems(
+            Update,
+            exit_success.run_if(input_just_pressed(KeyCode::Escape)),
+        )
         .add_observer(pointer_move_over_scene_image)
         .add_observer(pointer_scroll_over_scene_image)
         .add_observer(pointer_move_or_scroll_over_scene_image)
+        .add_observer(
+            |change: On<ValueChange<f32>>,
+             slider: Query<(Entity, &SliderValue)>,
+             mut commands: Commands| {
+                let source = change.source;
+                let value = change.value;
+                if let Ok((entity, current_value)) = slider.get(source) {
+                    if current_value.0 != value {
+                        commands
+                            .entity(entity)
+                            .insert(SliderValue(value))
+                            .trigger(|source| ActualChange { source, value });
+                    }
+                }
+            },
+        )
+        .add_observer(|ac: On<ActualChange<f32>>| info!("ac: {ac:#?}"))
         .run();
+}
+
+fn exit_success(mut commands: Commands) {
+    info!("Exiting");
+    commands.write_message(AppExit::default());
 }
 
 fn update_distance_from_checkerboard_to_camera_text(
@@ -421,7 +455,7 @@ fn setup(
     commands.spawn((PointLight::default(), camera_and_light_transform));
     commands.spawn((DirectionalLight::default(), camera_and_light_transform));
 
-    let root = root_node(&mut commands, ui_camera, &scene_image);
+    let root = root_node(ui_camera, &scene_image);
 
     commands.spawn(root);
 
@@ -583,7 +617,7 @@ fn button_selector(activate: On<Activate>, mut buttons: Query<(Entity, &mut Butt
 //     ))
 // }
 
-fn tabs_node(commands: &mut Commands) -> impl Bundle + use<> {
+fn tabs_node() -> impl Bundle + use<> {
     let button = |primary, tab_variant, tab_name| {
         (
             button(
@@ -621,79 +655,30 @@ fn tabs_node(commands: &mut Commands) -> impl Bundle + use<> {
             button(false, UiTabVariant::Light, "Light"),
             button(false, UiTabVariant::Camera, "Camera"),
             button(false, UiTabVariant::Debug, "Debug"),
-            // (
-            //     button(
-            //         ButtonProps {
-            //             variant: ButtonVariant::Primary,
-            //             ..default()
-            //         },
-            //         UiTabVariant::Geometry,
-            //         Spawn((Text::new("Geometry"), ThemedText))
-            //     ),
-            //     observe(button_selector)
-            // ),
-            // (
-            //     button(
-            //         ButtonProps::default(),
-            //         UiTabVariant::Material,
-            //         Spawn((Text::new("Material"), ThemedText))
-            //     ),
-            //     observe(button_selector)
-            // ),
-            // (
-            //     button(
-            //         ButtonProps::default(),
-            //         UiTabVariant::Environment,
-            //         Spawn((Text::new("Environment"), ThemedText))
-            //     ),
-            //     observe(button_selector)
-            // ),
-            // (
-            //     button(
-            //         ButtonProps::default(),
-            //         UiTabVariant::Light,
-            //         Spawn((Text::new("Light"), ThemedText))
-            //     ),
-            //     observe(button_selector)
-            // ),
-            // (
-            //     button(
-            //         ButtonProps::default(),
-            //         UiTabVariant::Camera,
-            //         Spawn((Text::new("Camera"), ThemedText))
-            //     ),
-            //     observe(button_selector)
-            // ),
-            // (
-            //     button(
-            //         ButtonProps::default(),
-            //         UiTabVariant::Debug,
-            //         Spawn((Text::new("Debug"), ThemedText))
-            //     ),
-            //     observe(button_selector)
-            // ),
         ],
     )
 }
 
-fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
-    // fn use_transform(
-    //     commands: &mut Commands,
-    //     use_with_new_value: impl Fn(&mut Transform, f32) + Send + Sync + 'static,
-    // ) -> Callback<In<ValueChange<f32>>> {
-    //     Callback::System(commands.register_system(
-    //         move |change: In<ValueChange<f32>>,
-    //               mut commands: Commands,
-    //               mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-    //             commands
-    //                 .entity(change.source)
-    //                 .insert(SliderValue(change.value));
+fn text(label: &str) -> impl Bundle {
+    (
+        Text(label.to_owned()),
+        TextFont::from_font_size(UI_TEXT_SMALL),
+    )
+}
 
-    //             use_with_new_value(&mut checkerboard, change.value);
-    //         },
-    //     ))
-    // }
+fn text_big(label: &str) -> impl Bundle {
+    (
+        Text(label.to_owned()),
+        TextLayout::new_with_justify(Justify::Center),
+        TextFont::from_font_size(UI_TEXT_BIG),
+    )
+}
 
+fn myslider(min: f32, value: f32, max: f32, precision: i32) -> impl Bundle {
+    slider(SliderProps { min, value, max }, SliderPrecision(precision))
+}
+
+fn geometry_node() -> impl Bundle {
     // Checkerboard settings node
     (
         Node {
@@ -706,71 +691,44 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
         UiTabVariant::Geometry,
         UiTabNode,
         children![
+            text_big("Geometry"),
+            text("Rows"),
             (
-                Text("Geometry".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
+                myslider(2.0, 11.0, 20.0, 0),
+                observe(
+                    |change: On<ActualChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
+                        info!("updating rows {change:#?}");
+                        for mut chk in &mut checkerboards {
+                            chk.rows = change.value as usize;
+                        }
+                    }
+                )
             ),
+            text("Cols"),
             (
-                Text("Rows".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
+                myslider(2.0, 10.0, 20.0, 0),
+                observe(
+                    |change: On<ActualChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
+                        info!("updating cols {change:#?}");
+                        for mut chk in &mut checkerboards {
+                            chk.cols = change.value as usize;
+                        }
+                    }
+                )
             ),
-            slider(
-                SliderProps {
-                    min: 2.0,
-                    value: 11.0,
-                    max: 20.0,
-                    // on_change: slider_component::<Checkerboard, ()>(
-                    //     commands,
-                    //     |checkerboard, value| {
-                    //         checkerboard.rows = value as _;
-                    //     }
-                    // ),
-                },
-                SliderPrecision(0),
-            ),
+            text("Square Size (mm)"),
             (
-                Text("Cols".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
+                myslider(5.0, 78.0, 100.0, 0),
+                observe(
+                    |change: On<ActualChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
+                        info!("updating square size {change:#?}");
+                        for mut chk in &mut checkerboards {
+                            chk.square_size = change.value * 1e-3;
+                        }
+                    }
+                )
             ),
-            slider(
-                SliderProps {
-                    min: 2.0,
-                    value: 10.0,
-                    max: 20.0,
-                    // on_change: slider_component::<Checkerboard, ()>(
-                    //     commands,
-                    //     |checkerboard, value| {
-                    //         checkerboard.cols = value as _;
-                    //     }
-                    // ),
-                },
-                SliderPrecision(0),
-            ),
-            (
-                Text("Square Size (mm)".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
-            slider(
-                SliderProps {
-                    min: 5.0,
-                    value: 78.0,
-                    max: 100.0,
-                    // on_change: slider_component::<Checkerboard, ()>(
-                    //     commands,
-                    //     |checkerboard, value| {
-                    //         // mm to meters
-                    //         checkerboard.square_size = value * 1e-3;
-                    //     }
-                    // ),
-                },
-                SliderPrecision(0),
-            ),
-            (
-                Text("Translation".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
+            text_big("Translation"),
             (
                 Node {
                     display: Display::Flex,
@@ -781,56 +739,33 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     ..default()
                 },
                 children![
+                    text("X"),
                     (
-                        Text("X".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(-2.0, 0.0, 2.0, 2),
+                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                            checkerboard.translation.x = change.value;
+                        }),
                     ),
-                    slider(
-                        SliderProps {
-                            min: -2.0,
-                            value: 0.0,
-                            max: 2.0,
-                            // on_change: use_transform(commands, |t, value| t.translation.x = value),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("Y"),
                     (
-                        Text("Y".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(-2.0, 0.0, 2.0, 2),
+                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                            checkerboard.translation.y = change.value;
+                        }),
                     ),
-                    slider(
-                        SliderProps {
-                            min: -2.0,
-                            value: 0.0,
-                            max: 2.0,
-                            // on_change: use_transform(commands, |t, value| t.translation.y = value),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("Z"),
                     (
-                        Text("Z".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
-                    slider(
-                        SliderProps {
-                            min: -2.0,
-                            value: 0.0,
-                            max: 2.0,
-                            // on_change: use_transform(commands, |t, value| t.translation.z = value),
-                        },
-                        SliderPrecision(2),
+                        myslider(-2.0, 0.0, 2.0, 2),
+                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                            checkerboard.translation.z = change.value;
+                        }),
                     ),
                 ]
             ),
+            text_big("Rotation"),
             (
-                Text("Rotation".to_owned()),
+                text("about world X/Y/Z (degrees)"),
                 TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
-            (
-                Text("about world X/Y/Z (degrees)".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_SMALL)
             ),
             (
                 Node {
@@ -842,55 +777,32 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
                     ..default()
                 },
                 children![
+                    text("X"),
                     (
-                        Text("X".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(-90.0, 0.0, 90.0, 2),
+                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                                let (_, y, z) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
+                                checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, change.value.to_radians(), y, z)
+                        }),
                     ),
-                    slider(
-                        SliderProps {
-                            min: -90.0,
-                            value: 0.0,
-                            max: 90.0,
-                            // on_change: use_transform(commands, |t, x| {
-                            //     let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                            //     t.rotation = Quat::from_euler(EulerRot::XYZEx, x.to_radians(), y, z)
-                            // }),
-                            ..default()
-                        },
-                        SliderPrecision(2),
-                    ),
+
+                    text("Y"),
                     (
-                        Text("Y".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(-90.0, 0.0, 90.0, 2),
+                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                                let (x, _, z) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
+                                checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, x, change.value.to_radians(), z)
+                        }),
                     ),
-                    slider(
-                        SliderProps {
-                            min: -90.0,
-                            value: 0.0,
-                            max: 90.0,
-                            // on_change: use_transform(commands, |t, y| {
-                            //     let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                            //     t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y.to_radians(), z)
-                            // }),
-                        },
-                        SliderPrecision(2),
-                    ),
+
+                    text("Z"),
                     (
-                        Text("Z".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(-90.0, 0.0, 90.0, 2),
+                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                                let (x, y, _) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
+                                checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, change.value.to_radians())
+                        }),
                     ),
-                    slider(
-                        SliderProps {
-                            min: -90.0,
-                            value: 0.0,
-                            max: 90.0,
-                            // on_change: use_transform(commands, |t, z| {
-                            //     let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
-                            //     t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, z.to_radians())
-                            // }),
-                        },
-                        SliderPrecision(2),
-                    )
                 ]
             ),
             (
@@ -906,7 +818,7 @@ fn geometry_node(commands: &mut Commands) -> impl Bundle + use<> {
     )
 }
 
-fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
+fn material_node() -> impl Bundle {
     // fn use_material<M: Asset + Material, C: Component>(
     //     commands: &mut Commands,
     //     use_with_new_value: impl Fn(&mut M, f32) + Send + Sync + 'static,
@@ -928,36 +840,36 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
     //     ))
     // }
 
-    let radio_check = commands.register_system(
-        |ent: In<Activate>,
-         child: Query<(Option<&ChildOf>, Option<&Children>)>,
-         decal: Single<
-            &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
-            With<ForwardDecal>,
-        >,
-         decals: Res<Decals>,
-         radio_decal: Query<&DecalTexture, With<RadioButton>>,
-         mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
-         mut commands: Commands| {
-            let radio_button_entity = ent.0.entity;
-            commands.entity(radio_button_entity).insert(Checked);
+    // let radio_check = commands.register_system(
+    //     |ent: In<Activate>,
+    //      child: Query<(Option<&ChildOf>, Option<&Children>)>,
+    //      decal: Single<
+    //         &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
+    //         With<ForwardDecal>,
+    //     >,
+    //      decals: Res<Decals>,
+    //      radio_decal: Query<&DecalTexture, With<RadioButton>>,
+    //      mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
+    //      mut commands: Commands| {
+    //         let radio_button_entity = ent.0.entity;
+    //         commands.entity(radio_button_entity).insert(Checked);
 
-            for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-                debug!("sibling of {radio_button_entity}: {sibling_radio_button}");
-                commands.entity(sibling_radio_button).remove::<Checked>();
-            }
+    //         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
+    //             debug!("sibling of {radio_button_entity}: {sibling_radio_button}");
+    //             commands.entity(sibling_radio_button).remove::<Checked>();
+    //         }
 
-            let texture = match radio_decal.get(radio_button_entity).unwrap() {
-                DecalTexture::Fingerprints => &decals.fingerprints,
-                DecalTexture::Raindrops => &decals.raindrops,
-                DecalTexture::ChewingGum => &decals.chewing_gum,
-            };
+    //         let texture = match radio_decal.get(radio_button_entity).unwrap() {
+    //             DecalTexture::Fingerprints => &decals.fingerprints,
+    //             DecalTexture::Raindrops => &decals.raindrops,
+    //             DecalTexture::ChewingGum => &decals.chewing_gum,
+    //         };
 
-            if let Some(material) = materials.get_mut(&decal.clone()) {
-                material.base.base_color_texture = Some(texture.clone());
-            }
-        },
-    );
+    //         if let Some(material) = materials.get_mut(&decal.clone()) {
+    //             material.base.base_color_texture = Some(texture.clone());
+    //         }
+    //     },
+    // );
 
     (
         Node {
@@ -1303,7 +1215,7 @@ fn material_node(commands: &mut Commands) -> impl Bundle + use<> {
     )
 }
 
-fn environment_node(commands: &mut Commands) -> impl Bundle + use<> {
+fn environment_node() -> impl Bundle {
     (
         Node {
             display: Display::Flex,
@@ -1357,7 +1269,7 @@ fn environment_node(commands: &mut Commands) -> impl Bundle + use<> {
     )
 }
 
-fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
+fn light_node() -> impl Bundle {
     (
         Node {
             display: Display::Flex,
@@ -1662,46 +1574,46 @@ fn light_node(commands: &mut Commands) -> impl Bundle + use<> {
     )
 }
 
-fn camera_node(commands: &mut Commands) -> impl Bundle + use<> {
-    let insert_or_remove_depth_of_field = commands.register_system(
-        |change: In<ValueChange<bool>>,
-         camera: Single<Entity, (With<Camera>, With<Camera3d>)>,
-         mut commands: Commands| {
-            info!("Depth of field to {}", change.value);
+fn camera_node() -> impl Bundle {
+    // let insert_or_remove_depth_of_field = commands.register_system(
+    //     |change: In<ValueChange<bool>>,
+    //      camera: Single<Entity, (With<Camera>, With<Camera3d>)>,
+    //      mut commands: Commands| {
+    //         info!("Depth of field to {}", change.value);
 
-            let checkbox = change.source;
+    //         let checkbox = change.source;
 
-            if change.value {
-                commands.entity(checkbox).insert(Checked);
-                commands.entity(*camera).insert(camera_depth_of_field());
-            } else {
-                commands.entity(checkbox).remove::<Checked>();
-                commands.entity(*camera).remove::<DepthOfField>();
-            }
-        },
-    );
+    //         if change.value {
+    //             commands.entity(checkbox).insert(Checked);
+    //             commands.entity(*camera).insert(camera_depth_of_field());
+    //         } else {
+    //             commands.entity(checkbox).remove::<Checked>();
+    //             commands.entity(*camera).remove::<DepthOfField>();
+    //         }
+    //     },
+    // );
 
     // Wrapper component to hold render resolution
     #[derive(Debug, Component)]
     struct RenderResolutionComponent(RenderResolution);
 
-    let radios_set_render_resolution = commands.register_system(
-        |ent: In<Activate>,
-         child: Query<(Option<&ChildOf>, Option<&Children>)>,
-         radio: Query<&RenderResolutionComponent>,
-         mut render_res: ResMut<RenderResolution>,
-         mut commands: Commands| {
-            let radio_button_entity = ent.0.entity;
-            commands.entity(radio_button_entity).insert(Checked);
+    // let radios_set_render_resolution = commands.register_system(
+    //     |ent: In<Activate>,
+    //      child: Query<(Option<&ChildOf>, Option<&Children>)>,
+    //      radio: Query<&RenderResolutionComponent>,
+    //      mut render_res: ResMut<RenderResolution>,
+    //      mut commands: Commands| {
+    //         let radio_button_entity = ent.0.entity;
+    //         commands.entity(radio_button_entity).insert(Checked);
 
-            for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-                info!("sibling of {radio_button_entity}: {sibling_radio_button}");
-                commands.entity(sibling_radio_button).remove::<Checked>();
-            }
+    //         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
+    //             info!("sibling of {radio_button_entity}: {sibling_radio_button}");
+    //             commands.entity(sibling_radio_button).remove::<Checked>();
+    //         }
 
-            *render_res = radio.get(radio_button_entity).unwrap().0;
-        },
-    );
+    //         *render_res = radio.get(radio_button_entity).unwrap().0;
+    //     },
+    // );
 
     (
         Node {
@@ -1971,28 +1883,28 @@ fn on_render_resolution_changed(
     }
 }
 
-fn debug_node(commands: &mut Commands) -> impl Bundle {
+fn debug_node() -> impl Bundle {
     // Wrapper component to hold DebugPickingMode so we can query radios by that
     #[derive(Debug, Component)]
     struct DebugPickingModeComponent(DebugPickingMode);
 
-    let radios_set_picking_mode = commands.register_system(
-        |ent: In<Activate>,
-         child: Query<(Option<&ChildOf>, Option<&Children>)>,
-         radio: Query<&DebugPickingModeComponent>,
-         mut picking_debug: ResMut<DebugPickingMode>,
-         mut commands: Commands| {
-            let radio_button_entity = ent.0.entity;
-            commands.entity(radio_button_entity).insert(Checked);
+    // let radios_set_picking_mode = commands.register_system(
+    //     |ent: In<Activate>,
+    //      child: Query<(Option<&ChildOf>, Option<&Children>)>,
+    //      radio: Query<&DebugPickingModeComponent>,
+    //      mut picking_debug: ResMut<DebugPickingMode>,
+    //      mut commands: Commands| {
+    //         let radio_button_entity = ent.0.entity;
+    //         commands.entity(radio_button_entity).insert(Checked);
 
-            for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-                info!("sibling of {radio_button_entity}: {sibling_radio_button}");
-                commands.entity(sibling_radio_button).remove::<Checked>();
-            }
+    //         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
+    //             info!("sibling of {radio_button_entity}: {sibling_radio_button}");
+    //             commands.entity(sibling_radio_button).remove::<Checked>();
+    //         }
 
-            *picking_debug = radio.get(radio_button_entity).unwrap().0;
-        },
-    );
+    //         *picking_debug = radio.get(radio_button_entity).unwrap().0;
+    //     },
+    // );
 
     (
         Node {
@@ -2248,18 +2160,14 @@ fn pointer_scroll_over_scene_image(
     }
 }
 
-fn root_node(
-    commands: &mut Commands,
-    camera_entity: Entity,
-    scene_image: &Handle<Image>,
-) -> impl Bundle {
-    let tabs = tabs_node(commands);
-    let geometry = geometry_node(commands);
-    let material = material_node(commands);
-    let environment = environment_node(commands);
-    let light = light_node(commands);
-    let camera = camera_node(commands);
-    let debug = debug_node(commands);
+fn root_node(camera_entity: Entity, scene_image: &Handle<Image>) -> impl Bundle {
+    let tabs = tabs_node();
+    let geometry = geometry_node();
+    let material = material_node();
+    let environment = environment_node();
+    let light = light_node();
+    let camera = camera_node();
+    let debug = debug_node();
 
     (
         Node {

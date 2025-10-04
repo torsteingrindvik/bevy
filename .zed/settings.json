@@ -1,0 +1,31 @@
+// Folder-specific settings
+//
+// For a full list of overridable settings, and general information on folder-specific settings,
+// see the documentation: https://zed.dev/docs/configuring-zed#settings-files
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        // "check": {
+        //   "command": "clippy",
+        //   "workspace": false
+        // },
+        // "diagnostics": {
+        //   "experimental": {
+        //     "enable": true
+        //   }
+        // },
+        "cargo": {
+          // "allTargets": true,
+          "features": [
+            "experimental_bevy_feathers",
+            "pbr_multi_layer_material_textures",
+            "bevy_ui_debug",
+            "jpeg",
+            "bevy_dev_tools"
+          ]
+        }
+      }
+    }
+  }
+}
