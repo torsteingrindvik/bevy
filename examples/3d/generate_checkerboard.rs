@@ -18,6 +18,7 @@
 //  - How do we ensure our perfect information is still correct?
 // - Decal scale aspect ratio independent of checkerboard aspect ratio
 // - CI to publish to webpage
+// - RGB use actual feathers color widgets
 
 // Scratchpad:
 //
@@ -59,6 +60,7 @@ use bevy::feathers::theme::ThemedText;
 use bevy::input::common_conditions::input_just_pressed;
 use bevy::math::Affine2;
 use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
+use bevy::pbr::ExtendedMaterial;
 use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
@@ -66,7 +68,7 @@ use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{
-    observe, Activate, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
+    observe, Activate, AddObserver, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
@@ -92,6 +94,7 @@ use bevy::{
 };
 use bevy_ecs::component::Mutable;
 use bevy_ecs::query::QueryFilter;
+use bevy_ecs::system::IntoObserverSystem;
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
@@ -139,6 +142,7 @@ struct Decals {
     chewing_gum: Handle<Image>,
 }
 
+// TODO: Make resource, change in radio observer, switch handle if not equal
 #[derive(Component)]
 enum DecalTexture {
     Fingerprints,
@@ -277,25 +281,85 @@ fn main() {
         .add_observer(pointer_move_over_scene_image)
         .add_observer(pointer_scroll_over_scene_image)
         .add_observer(pointer_move_or_scroll_over_scene_image)
-        .add_observer(
-            |change: On<ValueChange<f32>>,
-             slider: Query<(Entity, &SliderValue)>,
-             mut commands: Commands| {
-                let source = change.source;
-                let value = change.value;
-                if let Ok((entity, current_value)) = slider.get(source) {
-                    if current_value.0 != value {
-                        commands
-                            .entity(entity)
-                            .insert(SliderValue(value))
-                            .trigger(|source| ActualChange { source, value });
-                    }
-                }
-            },
-        )
+        .add_observer(observe_slider_updates)
+        .add_observer(observe_radio_updates)
         .add_observer(|ac: On<ActualChange<f32>>| info!("ac: {ac:#?}"))
         .run();
 }
+
+fn observe_slider_updates(
+    change: On<ValueChange<f32>>,
+    slider: Query<(Entity, &SliderValue)>,
+    mut commands: Commands,
+) {
+    let source = change.source;
+    let value = change.value;
+    if let Ok((entity, current_value)) = slider.get(source) {
+        if current_value.0 != value {
+            commands
+                .entity(entity)
+                .insert(SliderValue(value))
+                .trigger(|source| ActualChange { source, value });
+        }
+    }
+}
+
+fn observe_radio_updates(
+    activate: On<ValueChange<Entity>>,
+    radio_parents: Query<&RadioGroup>,
+    children: Query<&Children>,
+    radio_button: Query<&RadioButton>,
+    mut commands: Commands,
+) {
+    let source = activate.source;
+    let target = activate.value;
+    info!("Activate: {activate:?}");
+
+    if radio_parents.get(source).is_ok() {
+        for button_entity in children.iter_descendants(source) {
+            if radio_button.get(button_entity).is_ok() {
+                if button_entity == target {
+                    commands.entity(button_entity).insert(Checked);
+                } else {
+                    commands.entity(button_entity).remove::<Checked>();
+                }
+            }
+        }
+    }
+}
+
+// let radio_check = commands.register_system(
+//     |ent: In<Activate>,
+//      child: Query<(Option<&ChildOf>, Option<&Children>)>,
+//      decal: Single<
+//         &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
+//         With<ForwardDecal>,
+//     >,
+//      decals: Res<Decals>,
+//      radio_decal: Query<&DecalTexture, With<RadioButton>>,
+//      mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
+//      mut commands: Commands| {
+//         let radio_button_entity = ent.0.entity;
+//         commands.entity(radio_button_entity).insert(Checked);
+
+//         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
+//             debug!("sibling of {radio_button_entity}: {sibling_radio_button}");
+//             commands.entity(sibling_radio_button).remove::<Checked>();
+//         }
+
+//         let texture = match radio_decal.get(radio_button_entity).unwrap() {
+//             DecalTexture::Fingerprints => &decals.fingerprints,
+//             DecalTexture::Raindrops => &decals.raindrops,
+//             DecalTexture::ChewingGum => &decals.chewing_gum,
+//         };
+
+//         if let Some(material) = materials.get_mut(&decal.clone()) {
+//             material.base.base_color_texture = Some(texture.clone());
+//         }
+//     },
+// );
+//
+//
 
 fn exit_success(mut commands: Commands) {
     info!("Exiting");
@@ -819,57 +883,40 @@ fn geometry_node() -> impl Bundle {
 }
 
 fn material_node() -> impl Bundle {
-    // fn use_material<M: Asset + Material, C: Component>(
-    //     commands: &mut Commands,
-    //     use_with_new_value: impl Fn(&mut M, f32) + Send + Sync + 'static,
-    // ) -> Callback<In<ValueChange<f32>>> {
-    //     Callback::System(commands.register_system(
-    //         move |change: In<ValueChange<f32>>,
-    //               mut commands: Commands,
-    //               mut materials: ResMut<Assets<M>>,
-    //               material: Single<&mut MeshMaterial3d<M>, With<C>>| {
-    //             commands
-    //                 .entity(change.source)
-    //                 .insert(SliderValue(change.value));
+    fn use_material(
+        use_material: impl Fn(&mut StandardMaterial, f32) + Send + Sync + 'static,
+    ) -> impl Bundle {
+        observe(
+            move |change: On<ActualChange<f32>>,
+                  material: Single<&mut MeshMaterial3d<StandardMaterial>, With<Checkerboard>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>| {
+                let Some(material) = materials.get_mut(material.0.id()) else {
+                    warn!("no material via {}", material.0.id());
+                    return;
+                };
+                use_material(material, change.value);
+            },
+        )
+    }
 
-    //             let handle = material.0.clone();
-    //             let mut material = materials.get_mut(&handle).unwrap();
-
-    //             use_with_new_value(&mut material, change.value);
-    //         },
-    //     ))
-    // }
-
-    // let radio_check = commands.register_system(
-    //     |ent: In<Activate>,
-    //      child: Query<(Option<&ChildOf>, Option<&Children>)>,
-    //      decal: Single<
-    //         &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
-    //         With<ForwardDecal>,
-    //     >,
-    //      decals: Res<Decals>,
-    //      radio_decal: Query<&DecalTexture, With<RadioButton>>,
-    //      mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
-    //      mut commands: Commands| {
-    //         let radio_button_entity = ent.0.entity;
-    //         commands.entity(radio_button_entity).insert(Checked);
-
-    //         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-    //             debug!("sibling of {radio_button_entity}: {sibling_radio_button}");
-    //             commands.entity(sibling_radio_button).remove::<Checked>();
-    //         }
-
-    //         let texture = match radio_decal.get(radio_button_entity).unwrap() {
-    //             DecalTexture::Fingerprints => &decals.fingerprints,
-    //             DecalTexture::Raindrops => &decals.raindrops,
-    //             DecalTexture::ChewingGum => &decals.chewing_gum,
-    //         };
-
-    //         if let Some(material) = materials.get_mut(&decal.clone()) {
-    //             material.base.base_color_texture = Some(texture.clone());
-    //         }
-    //     },
-    // );
+    fn use_decal_material(
+        use_material: impl Fn(&mut ExtendedMaterial<StandardMaterial, ForwardDecalMaterialExt>, f32)
+            + Send
+            + Sync
+            + 'static,
+    ) -> impl Bundle {
+        observe(
+            move |change: On<ActualChange<f32>>,
+                  material: Single<&mut MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>, With<ForwardDecal>>,
+                  mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>| {
+                let Some(material) = materials.get_mut(material.0.id()) else {
+                    warn!("no material via {}", material.0.id());
+                    return;
+                };
+                use_material(material, change.value);
+            },
+        )
+    }
 
     (
         Node {
@@ -882,79 +929,28 @@ fn material_node() -> impl Bundle {
         UiTabVariant::Material,
         UiTabNode,
         children![
+            text_big("PBR"),
+            text("Metallic"),
             (
-                Text("PBR".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
+                myslider(0.0, 0.9, 1.0, 2),
+                use_material(|m, v| m.metallic = v),
             ),
+            text("Roughness"),
             (
-                Text("Metallic".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
+                myslider(0.089, 0.1, 1.0, 2),
+                use_material(|m, v| m.perceptual_roughness = v),
             ),
-            slider(
-                SliderProps {
-                    min: 0.0,
-                    value: 0.9,
-                    max: 1.0,
-                    // on_change: use_material::<StandardMaterial, Checkerboard>(
-                    //     commands,
-                    //     |material, value| { material.metallic = value }
-                    // )
-                },
-                SliderPrecision(2),
-            ),
+            text("Clearcoat"),
             (
-                Text("Roughness".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
+                myslider(0.0, 1.0, 1.0, 2),
+                use_material(|m, v| m.clearcoat = v),
             ),
-            slider(
-                SliderProps {
-                    min: 0.0,
-                    value: 0.1,
-                    max: 1.0,
-                    // on_change: use_material::<StandardMaterial, Checkerboard>(
-                    //     commands,
-                    //     |material, value| material.perceptual_roughness = value
-                    // )
-                },
-                SliderPrecision(2),
-            ),
+            text("Clearcoat Roughness"),
             (
-                Text("Clearcoat".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
+                myslider(0.0, 0.5, 1.0, 2),
+                use_material(|m, v| m.clearcoat_perceptual_roughness = v),
             ),
-            slider(
-                SliderProps {
-                    min: 0.0,
-                    value: 1.0,
-                    max: 1.0,
-                    // on_change: use_material::<StandardMaterial, Checkerboard>(
-                    //     commands,
-                    //     |material, value| material.clearcoat = value
-                    // )
-                },
-                SliderPrecision(2),
-            ),
-            (
-                Text("Clearcoat Roughness".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
-            slider(
-                SliderProps {
-                    min: 0.0,
-                    value: 0.5,
-                    max: 1.0,
-                    // on_change: use_material::<StandardMaterial, Checkerboard>(
-                    //     commands,
-                    //     |material, value| material.clearcoat_perceptual_roughness = value
-                    // )
-                },
-                SliderPrecision(2),
-            ),
-            (
-                Text("Color".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
+            text("Color"),
             (
                 Node {
                     display: Display::Flex,
@@ -965,76 +961,32 @@ fn material_node() -> impl Bundle {
                     ..default()
                 },
                 children![
+                    text("R"),
                     (
-                        Text("R".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.88, 1.0, 2),
+                        use_material(
+                            |m, v| m.base_color = m.base_color.to_linear().with_red(v).into()
+                        ),
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.88,
-                            max: 1.0,
-                            // on_change: use_material::<StandardMaterial, Checkerboard>(
-                            //     commands,
-                            //     |material, value| {
-                            //         let linear = material.base_color.to_linear();
-                            //         material.base_color = linear.with_red(value).into();
-                            //     }
-                            // )
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("G"),
                     (
-                        Text("G".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.88, 1.0, 2),
+                        use_material(
+                            |m, v| m.base_color = m.base_color.to_linear().with_green(v).into()
+                        ),
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.89,
-                            max: 1.0,
-                            // on_change: use_material::<StandardMaterial, Checkerboard>(
-                            //     commands,
-                            //     |material, value| {
-                            //         let linear = material.base_color.to_linear();
-                            //         material.base_color = linear.with_green(value).into();
-                            //     }
-                            // )
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("B"),
                     (
-                        Text("B".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.91,
-                            max: 1.0,
-                            // on_change: use_material::<StandardMaterial, Checkerboard>(
-                            //     commands,
-                            //     |material, value| {
-                            //         let linear = material.base_color.to_linear();
-                            //         material.base_color = linear.with_blue(value).into();
-                            //     }
-                            // )
-                        },
-                        SliderPrecision(2),
+                        myslider(0.0, 0.88, 1.0, 2),
+                        use_material(
+                            |m, v| m.base_color = m.base_color.to_linear().with_blue(v).into()
+                        ),
                     ),
                 ]
             ),
             // Decal
-            (
-                Text("Decal".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
-            (
-                Text("Texture".to_owned()),
-                TextLayout::new_with_justify(Justify::Left),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
+            text_big("Decal"),
+            text("Texture"),
             // Texture
             (
                 Node {
@@ -1047,24 +999,30 @@ fn material_node() -> impl Bundle {
                     // on_change: Callback::System(radio_check),
                 },
                 children![
-                    radio(
-                        (Checked, DecalTexture::Fingerprints),
-                        Spawn((Text::new("Fingerprints"), ThemedText))
+                    (
+                        radio(
+                            (Checked, DecalTexture::Fingerprints),
+                            Spawn((Text::new("Fingerprints"), ThemedText))
+                        ),
+                        observe(|_: On<Add, Checked>| info!("fingerp")),
                     ),
-                    radio(
-                        DecalTexture::Raindrops,
-                        Spawn((Text::new("Raindrops"), ThemedText))
+                    (
+                        radio(
+                            DecalTexture::Raindrops,
+                            Spawn((Text::new("Raindrops"), ThemedText))
+                        ),
+                        observe(|_: On<Add, Checked>| info!("raindr")),
                     ),
-                    radio(
-                        DecalTexture::ChewingGum,
-                        Spawn((Text::new("Chewing Gum"), ThemedText))
-                    ),
+                    (
+                        radio(
+                            DecalTexture::ChewingGum,
+                            Spawn((Text::new("Chewing Gum"), ThemedText))
+                        ),
+                        observe(|_: On<Add, Checked>| info!("chew")),
+                    )
                 ]
             ),
-            (
-                Text("Color".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
+            text("Color"),
             (
                 Node {
                     display: Display::Flex,
@@ -1075,142 +1033,50 @@ fn material_node() -> impl Bundle {
                     ..default()
                 },
                 children![
+                    text("R"),
                     (
-                        Text("R".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.28, 1.0, 2),
+                        use_decal_material(|m, v| m.base.base_color =
+                            m.base.base_color.to_linear().with_red(v).into()),
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.28,
-                            max: 1.0,
-                            // on_change: use_material::<
-                            //     ForwardDecalMaterial<StandardMaterial>,
-                            //     ForwardDecal,
-                            // >(
-                            //     commands,
-                            //     |material, value| {
-                            //         let linear = material.base.base_color.to_linear();
-                            //         material.base.base_color = linear.with_red(value).into();
-                            //     }
-                            // )
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("G"),
                     (
-                        Text("G".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.23, 1.0, 2),
+                        use_decal_material(|m, v| m.base.base_color =
+                            m.base.base_color.to_linear().with_green(v).into()),
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.23,
-                            max: 1.0,
-                            // on_change: use_material::<
-                            //     ForwardDecalMaterial<StandardMaterial>,
-                            //     ForwardDecal,
-                            // >(
-                            //     commands,
-                            //     |material, value| {
-                            //         let linear = material.base.base_color.to_linear();
-                            //         material.base.base_color = linear.with_green(value).into();
-                            //     }
-                            // )
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("B"),
                     (
-                        Text("B".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.11, 1.0, 2),
+                        use_decal_material(|m, v| m.base.base_color =
+                            m.base.base_color.to_linear().with_blue(v).into()),
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.11,
-                            max: 1.0,
-                            // on_change: use_material::<
-                            //     ForwardDecalMaterial<StandardMaterial>,
-                            //     ForwardDecal,
-                            // >(
-                            //     commands,
-                            //     |material, value| {
-                            //         let linear = material.base.base_color.to_linear();
-                            //         material.base.base_color = linear.with_blue(value).into();
-                            //     }
-                            // )
-                        },
-                        SliderPrecision(2),
-                    ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.57,
-                            max: 1.0,
-                            // on_change: use_material::<
-                            //     ForwardDecalMaterial<StandardMaterial>,
-                            //     ForwardDecal,
-                            // >(
-                            //     commands,
-                            //     |material, value| {
-                            //         let linear = material.base.base_color.to_linear();
-                            //         material.base.base_color = linear.with_alpha(value).into();
-                            //     }
-                            // )
-                        },
-                        SliderPrecision(2),
+                    text("A"),
+                    (
+                        myslider(0.0, 0.11, 1.0, 2),
+                        use_decal_material(|m, v| m.base.base_color =
+                            m.base.base_color.to_linear().with_alpha(v).into()),
                     ),
                 ]
             ),
+            text("Scale"),
             (
-                Text("Scale".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
+                myslider(0.1, 1.86, 10.0, 2),
+                use_decal_material(|m, v| {
+                    let (_, angle, translation) = m.base.uv_transform.to_scale_angle_translation();
+                    m.base.uv_transform =
+                        Affine2::from_scale_angle_translation(Vec2::splat(v), angle, translation);
+                }),
             ),
-            slider(
-                SliderProps {
-                    min: 0.1,
-                    value: 1.86,
-                    max: 10.0,
-                    // on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
-                    //     commands,
-                    //     |material, value| {
-                    //         let (_, angle, translation) =
-                    //             material.base.uv_transform.to_scale_angle_translation();
-
-                    //         material.base.uv_transform = Affine2::from_scale_angle_translation(
-                    //             Vec2::splat(value),
-                    //             angle,
-                    //             translation,
-                    //         );
-                    //     }
-                    // )
-                },
-                SliderPrecision(2),
-            ),
+            text("Rotation (degrees"),
             (
-                Text("Rotation (degrees)".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
+                myslider(0.0, 86.0, 360.0, 1),
+                use_decal_material(|m, v| {
+                    let (scale, _, translation) = m.base.uv_transform.to_scale_angle_translation();
+                    m.base.uv_transform =
+                        Affine2::from_scale_angle_translation(scale, v.to_radians(), translation);
+                }),
             ),
-            slider(
-                SliderProps {
-                    min: 0.0,
-                    value: 86.0,
-                    max: 360.0,
-                    // on_change: use_material::<ForwardDecalMaterial<StandardMaterial>, ForwardDecal>(
-                    //     commands,
-                    //     |material, value| {
-                    //         let (scale, _, translation) =
-                    //             material.base.uv_transform.to_scale_angle_translation();
-
-                    //         material.base.uv_transform = Affine2::from_scale_angle_translation(
-                    //             scale,
-                    //             value.to_radians(),
-                    //             translation,
-                    //         );
-                    //     }
-                    // )
-                },
-                SliderPrecision(1),
-            )
         ],
     )
 }
