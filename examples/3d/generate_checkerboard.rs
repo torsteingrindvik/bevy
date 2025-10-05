@@ -68,7 +68,7 @@ use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{
-    observe, Activate, AddObserver, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
+    observe, Activate, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
@@ -92,9 +92,6 @@ use bevy::{
     },
     ui_widgets::{SliderPrecision, SliderValue},
 };
-use bevy_ecs::component::Mutable;
-use bevy_ecs::query::QueryFilter;
-use bevy_ecs::system::IntoObserverSystem;
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
@@ -142,9 +139,9 @@ struct Decals {
     chewing_gum: Handle<Image>,
 }
 
-// TODO: Make resource, change in radio observer, switch handle if not equal
-#[derive(Component)]
-enum DecalTexture {
+#[derive(Resource, Default)]
+enum ChosenDecal {
+    #[default]
     Fingerprints,
     Raindrops,
     ChewingGum,
@@ -250,6 +247,7 @@ fn main() {
             },
         ))
         .init_resource::<RenderResolution>()
+        .init_resource::<ChosenDecal>()
         .insert_resource(UiTheme(create_dark_theme()))
         .insert_resource(DebugPickingMode::Disabled)
         .init_resource::<ShowCheckerboardCornerGizmos>()
@@ -278,6 +276,10 @@ fn main() {
             Update,
             exit_success.run_if(input_just_pressed(KeyCode::Escape)),
         )
+        .add_systems(
+            Update,
+            update_material_with_new_decal.run_if(resource_changed::<ChosenDecal>),
+        )
         .add_observer(pointer_move_over_scene_image)
         .add_observer(pointer_scroll_over_scene_image)
         .add_observer(pointer_move_or_scroll_over_scene_image)
@@ -285,6 +287,23 @@ fn main() {
         .add_observer(observe_radio_updates)
         .add_observer(|ac: On<ActualChange<f32>>| info!("ac: {ac:#?}"))
         .run();
+}
+
+fn update_material_with_new_decal(
+    chosen: Res<ChosenDecal>,
+    decals: Res<Decals>,
+    decal: Single<&MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>, With<ForwardDecal>>,
+    mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
+) {
+    let Some(mat) = materials.get_mut(decal.id()) else {
+        return;
+    };
+
+    mat.base.base_color_texture = Some(match *chosen {
+        ChosenDecal::Fingerprints => decals.fingerprints.clone(),
+        ChosenDecal::Raindrops => decals.raindrops.clone(),
+        ChosenDecal::ChewingGum => decals.chewing_gum.clone(),
+    });
 }
 
 fn observe_slider_updates(
@@ -1000,25 +1019,22 @@ fn material_node() -> impl Bundle {
                 },
                 children![
                     (
-                        radio(
-                            (Checked, DecalTexture::Fingerprints),
-                            Spawn((Text::new("Fingerprints"), ThemedText))
-                        ),
-                        observe(|_: On<Add, Checked>| info!("fingerp")),
+                        radio(Checked, Spawn((Text::new("Fingerprints"), ThemedText))),
+                        observe(|_: On<Add, Checked>, mut decal: ResMut<ChosenDecal>| {
+                            *decal = ChosenDecal::Fingerprints;
+                        }),
                     ),
                     (
-                        radio(
-                            DecalTexture::Raindrops,
-                            Spawn((Text::new("Raindrops"), ThemedText))
-                        ),
-                        observe(|_: On<Add, Checked>| info!("raindr")),
+                        radio((), Spawn((Text::new("Raindrops"), ThemedText))),
+                        observe(|_: On<Add, Checked>, mut decal: ResMut<ChosenDecal>| {
+                            *decal = ChosenDecal::Raindrops;
+                        }),
                     ),
                     (
-                        radio(
-                            DecalTexture::ChewingGum,
-                            Spawn((Text::new("Chewing Gum"), ThemedText))
-                        ),
-                        observe(|_: On<Add, Checked>| info!("chew")),
+                        radio((), Spawn((Text::new("Chewing Gum"), ThemedText))),
+                        observe(|_: On<Add, Checked>, mut decal: ResMut<ChosenDecal>| {
+                            *decal = ChosenDecal::ChewingGum;
+                        }),
                     )
                 ]
             ),
