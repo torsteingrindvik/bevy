@@ -70,7 +70,7 @@ use bevy::ui::Checked;
 use bevy::ui_widgets::{
     observe, Activate, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
 };
-use bevy::window::{PresentMode, PrimaryWindow};
+use bevy::window::PresentMode;
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
     render::render_resource::PrimitiveTopology,
@@ -347,39 +347,6 @@ fn observe_radio_updates(
     }
 }
 
-// let radio_check = commands.register_system(
-//     |ent: In<Activate>,
-//      child: Query<(Option<&ChildOf>, Option<&Children>)>,
-//      decal: Single<
-//         &MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>,
-//         With<ForwardDecal>,
-//     >,
-//      decals: Res<Decals>,
-//      radio_decal: Query<&DecalTexture, With<RadioButton>>,
-//      mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
-//      mut commands: Commands| {
-//         let radio_button_entity = ent.0.entity;
-//         commands.entity(radio_button_entity).insert(Checked);
-
-//         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-//             debug!("sibling of {radio_button_entity}: {sibling_radio_button}");
-//             commands.entity(sibling_radio_button).remove::<Checked>();
-//         }
-
-//         let texture = match radio_decal.get(radio_button_entity).unwrap() {
-//             DecalTexture::Fingerprints => &decals.fingerprints,
-//             DecalTexture::Raindrops => &decals.raindrops,
-//             DecalTexture::ChewingGum => &decals.chewing_gum,
-//         };
-
-//         if let Some(material) = materials.get_mut(&decal.clone()) {
-//             material.base.base_color_texture = Some(texture.clone());
-//         }
-//     },
-// );
-//
-//
-
 fn exit_success(mut commands: Commands) {
     info!("Exiting");
     commands.write_message(AppExit::default());
@@ -642,63 +609,6 @@ fn button_selector(activate: On<Activate>, mut buttons: Query<(Entity, &mut Butt
         }
     }
 }
-
-// fn slider_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
-//     commands: &mut Commands,
-//     use_with_new_value: impl Fn(&mut C, f32) + Send + Sync + 'static,
-// ) -> Callback<In<ValueChange<f32>>> {
-//     Callback::System(commands.register_system(
-//         move |change: In<ValueChange<f32>>,
-//               mut commands: Commands,
-//               mut component: Query<&mut C, F>| {
-//             commands
-//                 .entity(change.source)
-//                 .insert(SliderValue(change.value));
-
-//             for mut c in &mut component {
-//                 use_with_new_value(&mut c, change.value);
-//             }
-//         },
-//     ))
-// }
-
-// fn checkbox_component<C: Component<Mutability = Mutable>, F: QueryFilter + 'static>(
-//     commands: &mut Commands,
-//     use_with_new_value: impl Fn(&mut C, bool) + Send + Sync + 'static,
-// ) -> Callback<In<ValueChange<bool>>> {
-//     Callback::System(commands.register_system(
-//         move |change: In<ValueChange<bool>>,
-//               mut commands: Commands,
-//               mut component: Query<&mut C, F>| {
-//             if change.value {
-//                 commands.entity(change.source).insert(Checked);
-//             } else {
-//                 commands.entity(change.source).remove::<Checked>();
-//             };
-
-//             for mut c in &mut component {
-//                 use_with_new_value(&mut c, change.value);
-//             }
-//         },
-//     ))
-// }
-
-// fn checkbox_resource<R: Resource>(
-//     commands: &mut Commands,
-//     use_with_new_value: impl Fn(&mut R, bool) + Send + Sync + 'static,
-// ) -> Callback<In<ValueChange<bool>>> {
-//     Callback::System(commands.register_system(
-//         move |change: In<ValueChange<bool>>, mut commands: Commands, mut resource: ResMut<R>| {
-//             if change.value {
-//                 commands.entity(change.source).insert(Checked);
-//             } else {
-//                 commands.entity(change.source).remove::<Checked>();
-//             };
-
-//             use_with_new_value(&mut resource, change.value);
-//         },
-//     ))
-// }
 
 fn tabs_node() -> impl Bundle + use<> {
     let button = |primary, tab_variant, tab_name| {
@@ -1014,9 +924,7 @@ fn material_node() -> impl Bundle {
                     column_gap: px(4),
                     ..default()
                 },
-                RadioGroup {
-                    // on_change: Callback::System(radio_check),
-                },
+                RadioGroup,
                 children![
                     (
                         radio(Checked, Spawn((Text::new("Fingerprints"), ThemedText))),
@@ -1109,43 +1017,29 @@ fn environment_node() -> impl Bundle {
         UiTabVariant::Environment,
         UiTabNode,
         children![
+            text_big("Environment"),
+            text("Skybox Brightness"),
             (
-                Text("Environment".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
+                myslider(0.0, 5000.0, 10000.0, -3),
+                observe(
+                    |change: On<ActualChange<f32>>, mut skyboxes: Query<&mut Skybox>| {
+                        for mut sb in &mut skyboxes {
+                            sb.brightness = change.value;
+                        }
+                    }
+                )
             ),
+            text("Environment Intensity"),
             (
-                Text("Skybox Brightness".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
-            slider(
-                SliderProps {
-                    min: 0.0,
-                    value: 7000.0,
-                    max: 10000.0,
-                    // on_change: slider_component::<Skybox, ()>(commands, |skybox, value| {
-                    //     skybox.brightness = value;
-                    // }),
-                },
-                SliderPrecision(-3),
-            ),
-            (
-                Text("Environment Intensity".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
-            slider(
-                SliderProps {
-                    min: 0.0,
-                    value: 300.0,
-                    max: 10000.0,
-                    // on_change: slider_component::<EnvironmentMapLight, ()>(
-                    //     commands,
-                    //     |envmap, value| {
-                    //         envmap.intensity = value;
-                    //     }
-                    // ),
-                },
-                SliderPrecision(-2),
+                myslider(0.0, 2000.0, 10000.0, -2),
+                observe(
+                    |change: On<ActualChange<f32>>,
+                     mut envmaps: Query<&mut EnvironmentMapLight>| {
+                        for mut em in &mut envmaps {
+                            em.intensity = change.value;
+                        }
+                    }
+                )
             ),
         ],
     )
