@@ -19,6 +19,7 @@
 // - Decal scale aspect ratio independent of checkerboard aspect ratio
 // - CI to publish to webpage
 // - RGB use actual feathers color widgets
+// - Remove ActualChange since that got fixed
 
 // Scratchpad:
 //
@@ -66,9 +67,9 @@ use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
-use bevy::ui::Checked;
+use bevy::ui::{Checkable, Checked};
 use bevy::ui_widgets::{
-    observe, Activate, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
+    observe, Activate, Checkbox, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::PresentMode;
 use bevy::{
@@ -285,6 +286,7 @@ fn main() {
         .add_observer(pointer_move_or_scroll_over_scene_image)
         .add_observer(observe_slider_updates)
         .add_observer(observe_radio_updates)
+        .add_observer(observe_checkbox_updates)
         .add_observer(|ac: On<ActualChange<f32>>| info!("ac: {ac:#?}"))
         .run();
 }
@@ -343,6 +345,22 @@ fn observe_radio_updates(
                     commands.entity(button_entity).remove::<Checked>();
                 }
             }
+        }
+    }
+}
+
+fn observe_checkbox_updates(
+    change: On<ValueChange<bool>>,
+    checkable: Query<&Checkable>,
+    mut commands: Commands,
+) {
+    let source = change.source;
+    let value = change.value;
+    if checkable.get(source).is_ok() {
+        if value {
+            commands.entity(source).insert(Checked);
+        } else {
+            commands.entity(source).remove::<Checked>();
         }
     }
 }
@@ -671,8 +689,7 @@ fn myslider(min: f32, value: f32, max: f32, precision: i32) -> impl Bundle {
     slider(SliderProps { min, value, max }, SliderPrecision(precision))
 }
 
-fn geometry_node() -> impl Bundle {
-    // Checkerboard settings node
+fn tab_node(variant: UiTabVariant, bundle: impl Bundle) -> impl Bundle {
     (
         Node {
             display: Display::Flex,
@@ -681,8 +698,14 @@ fn geometry_node() -> impl Bundle {
             row_gap: px(UI_ROW_GAP_PER_TAB),
             ..default()
         },
-        UiTabVariant::Geometry,
+        variant,
         UiTabNode,
+        bundle,
+    )
+}
+
+fn geometry_node() -> impl Bundle {
+    tab_node(UiTabVariant::Geometry,
         children![
             text_big("Geometry"),
             text("Rows"),
@@ -847,16 +870,8 @@ fn material_node() -> impl Bundle {
         )
     }
 
-    (
-        Node {
-            display: Display::Flex,
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::SpaceBetween,
-            row_gap: px(UI_ROW_GAP_PER_TAB),
-            ..default()
-        },
+    tab_node(
         UiTabVariant::Material,
-        UiTabNode,
         children![
             text_big("PBR"),
             text("Metallic"),
@@ -1006,16 +1021,8 @@ fn material_node() -> impl Bundle {
 }
 
 fn environment_node() -> impl Bundle {
-    (
-        Node {
-            display: Display::Flex,
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::SpaceBetween,
-            row_gap: px(UI_ROW_GAP_PER_TAB),
-            ..default()
-        },
+    tab_node(
         UiTabVariant::Environment,
-        UiTabNode,
         children![
             text_big("Environment"),
             text("Skybox Brightness"),
@@ -1045,304 +1052,204 @@ fn environment_node() -> impl Bundle {
     )
 }
 
+fn ui_flex_row() -> impl Bundle {
+    Node {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Row,
+        justify_content: JustifyContent::SpaceBetween,
+        align_items: AlignItems::Center,
+        column_gap: px(4.),
+        ..default()
+    }
+}
+
+fn ui_flex_col() -> impl Bundle {
+    Node {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        justify_content: JustifyContent::SpaceBetween,
+        row_gap: px(UI_ROW_GAP_PER_TAB),
+        ..default()
+    }
+}
+
 fn light_node() -> impl Bundle {
-    (
-        Node {
-            display: Display::Flex,
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::SpaceBetween,
-            row_gap: px(UI_ROW_GAP_PER_TAB),
-            ..default()
-        },
+    tab_node(
         UiTabVariant::Light,
-        UiTabNode,
         children![
-            (
-                Text("Light".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
-            (
-                Text("Direction".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
+            text_big("Light"),
+            text("Direction"),
             // Direction XYZ
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
+                ui_flex_row(),
                 children![
+                    text("X"),
                     (
-                        Text("X".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 100.0, 360.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
+                                info!("updating light {change:#?}");
+                                for mut t in &mut lights {
+                                    let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, change.value.to_radians(), y, z)
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 100.0,
-                            max: 360.0,
-                            // on_change: slider_component::<Transform, With<DirectionalLight>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         let (_, y, z) =
-                            //             light_transform.rotation.to_euler(EulerRot::XYZEx);
-                            //         light_transform.rotation =
-                            //             Quat::from_euler(EulerRot::XYZEx, value.to_radians(), y, z)
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("Y"),
                     (
-                        Text("Y".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 100.0, 360.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
+                                info!("updating light {change:#?}");
+                                for mut t in &mut lights {
+                                    let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, change.value.to_radians(), z)
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 100.0,
-                            max: 360.0,
-                            // on_change: slider_component::<Transform, With<DirectionalLight>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         let (x, _, z) =
-                            //             light_transform.rotation.to_euler(EulerRot::XYZEx);
-                            //         light_transform.rotation =
-                            //             Quat::from_euler(EulerRot::XYZEx, x, value.to_radians(), z)
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("Z"),
                     (
-                        Text("Z".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 100.0, 360.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
+                                info!("updating light {change:#?}");
+                                for mut t in &mut lights {
+                                    let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
+                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, change.value.to_radians())
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 100.0,
-                            max: 360.0,
-                            // on_change: slider_component::<Transform, With<DirectionalLight>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         let (x, y, _) =
-                            //             light_transform.rotation.to_euler(EulerRot::XYZEx);
-                            //         light_transform.rotation =
-                            //             Quat::from_euler(EulerRot::XYZEx, x, y, value.to_radians())
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2)
-                    )
                 ]
             ),
             // Direction RGB
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
+                ui_flex_row(),
                 children![
+                    text("R"),
                     (
-                        Text("R".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.8, 1.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
+                                info!("updating light {change:#?}");
+                                for mut l in &mut lights {
+                                    l.color = l.color.to_linear().with_red(change.value).into();
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<DirectionalLight, ()>(
-                            //     commands,
-                            //     |light, value| {
-                            //         light.color = light.color.to_linear().with_red(value).into();
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("G"),
                     (
-                        Text("G".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.8, 1.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
+                                info!("updating light {change:#?}");
+                                for mut l in &mut lights {
+                                    l.color = l.color.to_linear().with_green(change.value).into();
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.1,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<DirectionalLight, ()>(
-                            //     commands,
-                            //     |light, value| {
-                            //         light.color = light.color.to_linear().with_green(value).into();
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("B"),
                     (
-                        Text("B".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<DirectionalLight, ()>(
-                            //     commands,
-                            //     |light, value| {
-                            //         light.color = light.color.to_linear().with_blue(value).into();
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
+                        myslider(0.0, 0.8, 1.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
+                                info!("updating light {change:#?}");
+                                for mut l in &mut lights {
+                                    l.color = l.color.to_linear().with_blue(change.value).into();
+                                }
+                            }
+                        )
                     ),
                 ]
             ),
+            text("Point"),
             (
-                Text("Point".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
-            (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
+                ui_flex_row(),
                 children![
+                    text("X"),
                     (
-                        Text("X".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 100.0, 360.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
+                                info!("updating light {change:#?}");
+                                for mut t in &mut lights {
+                                    let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, change.value.to_radians(), y, z)
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<Transform, With<PointLight>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         light_transform.translation.x = value;
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("Y"),
                     (
-                        Text("Y".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 100.0, 360.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
+                                info!("updating light {change:#?}");
+                                for mut t in &mut lights {
+                                    let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
+                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, change.value.to_radians(), z)
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.1,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<Transform, With<PointLight>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         light_transform.translation.y = value;
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("Z"),
                     (
-                        Text("Z".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<Transform, With<PointLight>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         light_transform.translation.z = value;
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
+                        myslider(0.0, 100.0, 360.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
+                                info!("updating light {change:#?}");
+                                for mut t in &mut lights {
+                                    let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
+                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, change.value.to_radians())
+                                }
+                            }
+                        )
                     ),
                 ]
             ),
             // Point RGB
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
+                ui_flex_row(),
                 children![
+                    text("R"),
                     (
-                        Text("R".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.8, 1.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut PointLight>| {
+                                info!("updating light {change:#?}");
+                                for mut l in &mut lights {
+                                    l.color = l.color.to_linear().with_red(change.value).into();
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<PointLight, ()>(
-                            //     commands,
-                            //     |light, value| {
-                            //         light.color = light.color.to_linear().with_red(value).into();
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("G"),
                     (
-                        Text("G".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
+                        myslider(0.0, 0.8, 1.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut PointLight>| {
+                                info!("updating light {change:#?}");
+                                for mut l in &mut lights {
+                                    l.color = l.color.to_linear().with_green(change.value).into();
+                                }
+                            }
+                        )
                     ),
-                    slider(
-                        SliderProps {
-                            min: 0.1,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<PointLight, ()>(
-                            //     commands,
-                            //     |light, value| {
-                            //         light.color = light.color.to_linear().with_green(value).into();
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
+                    text("B"),
                     (
-                        Text("B".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.8,
-                            max: 1.0,
-                            // on_change: slider_component::<PointLight, ()>(
-                            //     commands,
-                            //     |light, value| {
-                            //         light.color = light.color.to_linear().with_blue(value).into();
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
+                        myslider(0.0, 0.8, 1.0, 2),
+                        observe(
+                            |change: On<ActualChange<f32>>, mut lights: Query<&mut PointLight>| {
+                                info!("updating light {change:#?}");
+                                for mut l in &mut lights {
+                                    l.color = l.color.to_linear().with_blue(change.value).into();
+                                }
+                            }
+                        )
                     ),
                 ]
             ),
@@ -1391,36 +1298,14 @@ fn camera_node() -> impl Bundle {
     //     },
     // );
 
-    (
-        Node {
-            display: Display::Flex,
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::SpaceBetween,
-            row_gap: px(UI_ROW_GAP_PER_TAB),
-            ..default()
-        },
+    tab_node(
         UiTabVariant::Camera,
-        UiTabNode,
         children![
+            text_big("Position"),
             (
-                Text("Position".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
-            (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
+                ui_flex_row(),
                 children![
-                    (
-                        Text("X".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("X"),
                     slider(
                         SliderProps {
                             min: 0.0,
@@ -1435,10 +1320,7 @@ fn camera_node() -> impl Bundle {
                         },
                         SliderPrecision(2),
                     ),
-                    (
-                        Text("Y".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("Y"),
                     slider(
                         SliderProps {
                             min: 0.1,
@@ -1453,10 +1335,7 @@ fn camera_node() -> impl Bundle {
                         },
                         SliderPrecision(2),
                     ),
-                    (
-                        Text("Z".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("Z"),
                     slider(
                         SliderProps {
                             min: 0.0,
@@ -1474,65 +1353,44 @@ fn camera_node() -> impl Bundle {
                 ]
             ),
             // Projection
+            text_big("Projection"),
+            text("Field of View (degrees)"),
             (
-                Text("Projection".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
-            (
-                Text("Field of View (degrees)".to_owned()),
-                TextFont::from_font_size(UI_TEXT_SMALL)
-            ),
-            slider(
-                SliderProps {
-                    min: 10.0,
-                    value: 45.0,
-                    max: 135.0,
-                    // on_change: slider_component::<Projection, With<Camera3d>>(
-                    //     commands,
-                    //     |projection, value| {
-                    //         let perspective = match projection {
-                    //             Projection::Perspective(p) => p,
-                    //             _ => {
-                    //                 unimplemented!();
-                    //             }
-                    //         };
+                ui_flex_row(),
+                children![slider(
+                    SliderProps {
+                        min: 10.0,
+                        value: 45.0,
+                        max: 135.0,
+                        // on_change: slider_component::<Projection, With<Camera3d>>(
+                        //     commands,
+                        //     |projection, value| {
+                        //         let perspective = match projection {
+                        //             Projection::Perspective(p) => p,
+                        //             _ => {
+                        //                 unimplemented!();
+                        //             }
+                        //         };
 
-                    //         perspective.fov = value.to_radians();
-                    //     }
-                    // ),
-                },
-                SliderPrecision(1),
+                        //         perspective.fov = value.to_radians();
+                        //     }
+                        // ),
+                    },
+                    SliderPrecision(1),
+                ),]
             ),
             // DoF
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Column,
-                    justify_content: JustifyContent::SpaceBetween,
-                    row_gap: px(UI_ROW_GAP_PER_TAB),
-                    ..default()
-                },
+                ui_flex_col(),
                 children![
+                    text_big("Depth of Field"),
                     (
-                        Text("Depth of Field".to_owned()),
-                        TextLayout::new_with_justify(Justify::Center),
-                        TextFont::from_font_size(UI_TEXT_BIG)
-                    ),
-                    checkbox(
-                        (
-                            // CheckboxProps {
-                            //     // on_change: Callback::System(insert_or_remove_depth_of_field),
-                            // },
-                            Checked
-                        ),
-                        Spawn((Text::new("Enabled"), ThemedText))
+                        checkbox(Checked, Spawn((Text::new("Enabled"), ThemedText))),
+                        observe(|h: On<Activate>| { info!("hehe {h:?}") }),
+                        observe(|h: On<ValueChange<bool>>| { info!("hehe2 {h:?}") })
                     ),
                     // Focal distance node
-                    (
-                        Text("Focal Distance".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("Focal Distance"),
                     slider(
                         SliderProps {
                             min: 0.3,
@@ -1548,10 +1406,7 @@ fn camera_node() -> impl Bundle {
                         SliderPrecision(2),
                     ),
                     // Sensor height node
-                    (
-                        Text("Sensor Height (mm)".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("Sensor Height (mm)"),
                     slider(
                         SliderProps {
                             min: 5.0,
@@ -1567,10 +1422,7 @@ fn camera_node() -> impl Bundle {
                         SliderPrecision(2),
                     ),
                     // F-stops node
-                    (
-                        Text("F-stops".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("F-stops"),
                     slider(
                         SliderProps {
                             min: 0.1,
@@ -1599,10 +1451,7 @@ fn camera_node() -> impl Bundle {
                     // on_change: Callback::System(radios_set_render_resolution),
                 },
                 children![
-                    (
-                        Text("Resolution".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("Resolution"),
                     radio(
                         RenderResolutionComponent(RenderResolution::Res4K),
                         Spawn((Text::new("4K"), ThemedText))
@@ -1682,22 +1531,10 @@ fn debug_node() -> impl Bundle {
     //     },
     // );
 
-    (
-        Node {
-            display: Display::Flex,
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::SpaceBetween,
-            row_gap: px(UI_ROW_GAP_PER_TAB),
-            ..default()
-        },
+    tab_node(
         UiTabVariant::Debug,
-        UiTabNode,
         children![
-            (
-                Text("Debug".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
+            text_big("Debug"),
             checkbox(
                 (
                     // CheckboxProps {
@@ -1796,10 +1633,7 @@ fn debug_node() -> impl Bundle {
                     // on_change: Callback::System(radios_set_picking_mode),
                 },
                 children![
-                    (
-                        Text("Picking".to_owned()),
-                        TextFont::from_font_size(UI_TEXT_SMALL)
-                    ),
+                    text("Picking"),
                     radio(
                         (
                             Checked,
@@ -1818,11 +1652,7 @@ fn debug_node() -> impl Bundle {
                 ]
             ),
             // UI debug
-            (
-                Text("UI debug".to_owned()),
-                TextLayout::new_with_justify(Justify::Center),
-                TextFont::from_font_size(UI_TEXT_BIG)
-            ),
+            text_big("UI debug"),
             checkbox(
                 // CheckboxProps {
                 //     // on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
