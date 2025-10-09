@@ -1,7 +1,19 @@
 [
   {
     "label": "Checkerboard app",
-    "command": "cargo run --release --example generate_checkerboard -F experimental_bevy_feathers,pbr_multi_layer_material_textures,bevy_dev_tools,bevy_ui_debug,jpeg",
+    "command": "cargo run --release --example generate_checkerboard -F experimental_bevy_feathers,pbr_multi_layer_material_textures,bevy_dev_tools,bevy_ui_debug,jpeg,free_cam",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "no_focus",
+    "reveal_target": "dock",
+    "hide": "on_success",
+    "shell": {
+      "program": "/bin/bash"
+    }
+  },
+  {
+    "label": "Feathers",
+    "command": "cargo run --release --example feathers -F experimental_bevy_feathers",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
     "reveal": "no_focus",

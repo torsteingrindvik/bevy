@@ -1116,7 +1116,8 @@ required-features = [
     "pbr_multi_layer_material_textures",
     "bevy_ui_debug",
     "jpeg",
-    "bevy_dev_tools"
+    "bevy_dev_tools",
+    "free_cam"
 ]
 
 [package.metadata.example.generate_checkerboard]

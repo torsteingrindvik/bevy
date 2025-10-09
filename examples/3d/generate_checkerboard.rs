@@ -19,7 +19,7 @@
 // - Decal scale aspect ratio independent of checkerboard aspect ratio
 // - CI to publish to webpage
 // - RGB use actual feathers color widgets
-// - Remove ActualChange since that got fixed
+// - FreeCam enabled checkbox
 
 // Scratchpad:
 //
@@ -46,9 +46,6 @@
 // Also we want to be able to plan this out in a menu step-by-step, as well as preview running through it without doing
 // any save to disk
 
-#[path = "../helpers/camera_controller.rs"]
-mod camera_controller;
-
 use std::iter::zip;
 
 use bevy::anti_alias::fxaa::Fxaa;
@@ -69,7 +66,8 @@ use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::{Checkable, Checked};
 use bevy::ui_widgets::{
-    observe, Activate, Checkbox, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
+    observe, slider_self_update, Activate, Checkbox, RadioButton, RadioGroup, Slider,
+    UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::PresentMode;
 use bevy::{
@@ -77,10 +75,7 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
 };
 use bevy::{
-    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
-    text::FontSmoothing,
-};
-use bevy::{
+    camera_controller::free_cam::{FreeCam, FreeCamPlugin},
     feathers::{
         controls::{slider, SliderProps},
         dark_theme::create_dark_theme,
@@ -93,12 +88,13 @@ use bevy::{
     },
     ui_widgets::{SliderPrecision, SliderValue},
 };
+use bevy::{
+    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
+    text::FontSmoothing,
+};
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
-
-// use crate::camera_controller::CameraController;
-use crate::camera_controller::CameraControllerPlugin;
 
 const UI_TEXT_MINI: f32 = 10.0;
 const UI_TEXT_SMALL: f32 = 12.0;
@@ -192,13 +188,6 @@ struct ZoomSize(f32);
 #[derive(Debug, Component)]
 struct CheckerboardDistanceToCamera;
 
-#[derive(Copy, Clone, Debug, PartialEq, EntityEvent)]
-struct ActualChange<T> {
-    #[event_target]
-    source: Entity,
-    value: T,
-}
-
 fn main() {
     App::new()
         .add_plugins((
@@ -215,7 +204,7 @@ fn main() {
                     filter: "bevy_dev_tools=trace".into(), // Show picking logs trace level and up
                     ..default()
                 }),
-            CameraControllerPlugin,
+            FreeCamPlugin,
             DebugPickingPlugin,
             UiWidgetsPlugins,
             InputDispatchPlugin,
@@ -287,7 +276,7 @@ fn main() {
         .add_observer(observe_slider_updates)
         .add_observer(observe_radio_updates)
         .add_observer(observe_checkbox_updates)
-        .add_observer(|ac: On<ActualChange<f32>>| info!("ac: {ac:#?}"))
+        .add_observer(|ac: On<ValueChange<f32>>| info!("ac: {ac:#?}"))
         .run();
 }
 
@@ -310,18 +299,13 @@ fn update_material_with_new_decal(
 
 fn observe_slider_updates(
     change: On<ValueChange<f32>>,
-    slider: Query<(Entity, &SliderValue)>,
+    slider: Query<Entity, With<SliderValue>>,
     mut commands: Commands,
 ) {
     let source = change.source;
     let value = change.value;
-    if let Ok((entity, current_value)) = slider.get(source) {
-        if current_value.0 != value {
-            commands
-                .entity(entity)
-                .insert(SliderValue(value))
-                .trigger(|source| ActualChange { source, value });
-        }
+    if let Ok(entity) = slider.get(source) {
+        commands.entity(entity).insert(SliderValue(value));
     }
 }
 
@@ -448,7 +432,10 @@ fn setup(
     commands
         .spawn((
             Camera3d::default(),
-            // CameraController::default(),
+            FreeCam {
+                enabled: false,
+                ..default()
+            },
             Msaa::Off,
             Fxaa::default(), // Supports both decals and WebGPU at the same time
             Hdr,
@@ -712,7 +699,7 @@ fn geometry_node() -> impl Bundle {
             (
                 myslider(2.0, 11.0, 20.0, 0),
                 observe(
-                    |change: On<ActualChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
+                    |change: On<ValueChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
                         info!("updating rows {change:#?}");
                         for mut chk in &mut checkerboards {
                             chk.rows = change.value as usize;
@@ -724,7 +711,7 @@ fn geometry_node() -> impl Bundle {
             (
                 myslider(2.0, 10.0, 20.0, 0),
                 observe(
-                    |change: On<ActualChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
+                    |change: On<ValueChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
                         info!("updating cols {change:#?}");
                         for mut chk in &mut checkerboards {
                             chk.cols = change.value as usize;
@@ -736,7 +723,7 @@ fn geometry_node() -> impl Bundle {
             (
                 myslider(5.0, 78.0, 100.0, 0),
                 observe(
-                    |change: On<ActualChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
+                    |change: On<ValueChange<f32>>, mut checkerboards: Query<&mut Checkerboard>| {
                         info!("updating square size {change:#?}");
                         for mut chk in &mut checkerboards {
                             chk.square_size = change.value * 1e-3;
@@ -758,21 +745,21 @@ fn geometry_node() -> impl Bundle {
                     text("X"),
                     (
                         myslider(-2.0, 0.0, 2.0, 2),
-                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                             checkerboard.translation.x = change.value;
                         }),
                     ),
                     text("Y"),
                     (
                         myslider(-2.0, 0.0, 2.0, 2),
-                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                             checkerboard.translation.y = change.value;
                         }),
                     ),
                     text("Z"),
                     (
                         myslider(-2.0, 0.0, 2.0, 2),
-                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                             checkerboard.translation.z = change.value;
                         }),
                     ),
@@ -796,7 +783,7 @@ fn geometry_node() -> impl Bundle {
                     text("X"),
                     (
                         myslider(-90.0, 0.0, 90.0, 2),
-                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                                 let (_, y, z) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
                                 checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, change.value.to_radians(), y, z)
                         }),
@@ -805,7 +792,7 @@ fn geometry_node() -> impl Bundle {
                     text("Y"),
                     (
                         myslider(-90.0, 0.0, 90.0, 2),
-                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                                 let (x, _, z) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
                                 checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, x, change.value.to_radians(), z)
                         }),
@@ -814,7 +801,7 @@ fn geometry_node() -> impl Bundle {
                     text("Z"),
                     (
                         myslider(-90.0, 0.0, 90.0, 2),
-                        observe(|change: On<ActualChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                                 let (x, y, _) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
                                 checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, change.value.to_radians())
                         }),
@@ -839,7 +826,7 @@ fn material_node() -> impl Bundle {
         use_material: impl Fn(&mut StandardMaterial, f32) + Send + Sync + 'static,
     ) -> impl Bundle {
         observe(
-            move |change: On<ActualChange<f32>>,
+            move |change: On<ValueChange<f32>>,
                   material: Single<&mut MeshMaterial3d<StandardMaterial>, With<Checkerboard>>,
                   mut materials: ResMut<Assets<StandardMaterial>>| {
                 let Some(material) = materials.get_mut(material.0.id()) else {
@@ -858,7 +845,7 @@ fn material_node() -> impl Bundle {
             + 'static,
     ) -> impl Bundle {
         observe(
-            move |change: On<ActualChange<f32>>,
+            move |change: On<ValueChange<f32>>,
                   material: Single<&mut MeshMaterial3d<ForwardDecalMaterial<StandardMaterial>>, With<ForwardDecal>>,
                   mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>| {
                 let Some(material) = materials.get_mut(material.0.id()) else {
@@ -1029,7 +1016,7 @@ fn environment_node() -> impl Bundle {
             (
                 myslider(0.0, 5000.0, 10000.0, -3),
                 observe(
-                    |change: On<ActualChange<f32>>, mut skyboxes: Query<&mut Skybox>| {
+                    |change: On<ValueChange<f32>>, mut skyboxes: Query<&mut Skybox>| {
                         for mut sb in &mut skyboxes {
                             sb.brightness = change.value;
                         }
@@ -1040,8 +1027,7 @@ fn environment_node() -> impl Bundle {
             (
                 myslider(0.0, 2000.0, 10000.0, -2),
                 observe(
-                    |change: On<ActualChange<f32>>,
-                     mut envmaps: Query<&mut EnvironmentMapLight>| {
+                    |change: On<ValueChange<f32>>, mut envmaps: Query<&mut EnvironmentMapLight>| {
                         for mut em in &mut envmaps {
                             em.intensity = change.value;
                         }
@@ -1087,7 +1073,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 100.0, 360.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
                                 info!("updating light {change:#?}");
                                 for mut t in &mut lights {
                                     let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
@@ -1100,7 +1086,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 100.0, 360.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
                                 info!("updating light {change:#?}");
                                 for mut t in &mut lights {
                                     let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
@@ -1113,7 +1099,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 100.0, 360.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
                                 info!("updating light {change:#?}");
                                 for mut t in &mut lights {
                                     let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
@@ -1132,7 +1118,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 0.8, 1.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
                                 info!("updating light {change:#?}");
                                 for mut l in &mut lights {
                                     l.color = l.color.to_linear().with_red(change.value).into();
@@ -1144,7 +1130,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 0.8, 1.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
                                 info!("updating light {change:#?}");
                                 for mut l in &mut lights {
                                     l.color = l.color.to_linear().with_green(change.value).into();
@@ -1156,7 +1142,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 0.8, 1.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
                                 info!("updating light {change:#?}");
                                 for mut l in &mut lights {
                                     l.color = l.color.to_linear().with_blue(change.value).into();
@@ -1174,7 +1160,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 100.0, 360.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
                                 info!("updating light {change:#?}");
                                 for mut t in &mut lights {
                                     let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
@@ -1187,7 +1173,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 100.0, 360.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
                                 info!("updating light {change:#?}");
                                 for mut t in &mut lights {
                                     let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
@@ -1200,7 +1186,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 100.0, 360.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
                                 info!("updating light {change:#?}");
                                 for mut t in &mut lights {
                                     let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
@@ -1219,7 +1205,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 0.8, 1.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut PointLight>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut PointLight>| {
                                 info!("updating light {change:#?}");
                                 for mut l in &mut lights {
                                     l.color = l.color.to_linear().with_red(change.value).into();
@@ -1231,7 +1217,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 0.8, 1.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut PointLight>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut PointLight>| {
                                 info!("updating light {change:#?}");
                                 for mut l in &mut lights {
                                     l.color = l.color.to_linear().with_green(change.value).into();
@@ -1243,7 +1229,7 @@ fn light_node() -> impl Bundle {
                     (
                         myslider(0.0, 0.8, 1.0, 2),
                         observe(
-                            |change: On<ActualChange<f32>>, mut lights: Query<&mut PointLight>| {
+                            |change: On<ValueChange<f32>>, mut lights: Query<&mut PointLight>| {
                                 info!("updating light {change:#?}");
                                 for mut l in &mut lights {
                                     l.color = l.color.to_linear().with_blue(change.value).into();
