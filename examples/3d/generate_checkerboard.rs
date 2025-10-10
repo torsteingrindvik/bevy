@@ -19,6 +19,7 @@
 // - Decal scale aspect ratio independent of checkerboard aspect ratio
 // - CI to publish to webpage
 // - RGB use actual feathers color widgets
+//   - There's no actual 2D picker
 // - FreeCam enabled checkbox
 
 // Scratchpad:
@@ -66,8 +67,8 @@ use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::{Checkable, Checked};
 use bevy::ui_widgets::{
-    observe, slider_self_update, Activate, Checkbox, RadioButton, RadioGroup, Slider,
-    UiWidgetsPlugins, ValueChange,
+    checkbox_self_update, observe, slider_self_update, Activate, Checkbox, RadioButton, RadioGroup,
+    Slider, UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::PresentMode;
 use bevy::{
@@ -448,7 +449,6 @@ fn setup(
             camera_and_light_transform,
             Tonemapping::AcesFitted,
             Bloom::NATURAL,
-            camera_depth_of_field(),
         ))
         .insert(Skybox {
             brightness: 5000.0,
@@ -731,82 +731,22 @@ fn geometry_node() -> impl Bundle {
                     }
                 )
             ),
-            text_big("Translation"),
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
-                children![
-                    text("X"),
-                    (
-                        myslider(-2.0, 0.0, 2.0, 2),
-                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-                            checkerboard.translation.x = change.value;
-                        }),
-                    ),
-                    text("Y"),
-                    (
-                        myslider(-2.0, 0.0, 2.0, 2),
-                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-                            checkerboard.translation.y = change.value;
-                        }),
-                    ),
-                    text("Z"),
-                    (
-                        myslider(-2.0, 0.0, 2.0, 2),
-                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-                            checkerboard.translation.z = change.value;
-                        }),
-                    ),
-                ]
-            ),
-            text_big("Rotation"),
-            (
-                text("about world X/Y/Z (degrees)"),
-                TextLayout::new_with_justify(Justify::Center),
+                vec3_node("Translation", ["X", "Y", "Z"], -2. * Vec3::ONE, Vec3::ZERO, Vec3::ONE*2., IVec3::ONE * 2),
+                observe(
+                    |vec3: On<Vec3Event>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                        checkerboard.translation = vec3.value;
+                    }
+                ),
             ),
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
-                children![
-                    text("X"),
-                    (
-                        myslider(-90.0, 0.0, 90.0, 2),
-                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-                                let (_, y, z) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
-                                checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, change.value.to_radians(), y, z)
-                        }),
-                    ),
-
-                    text("Y"),
-                    (
-                        myslider(-90.0, 0.0, 90.0, 2),
-                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-                                let (x, _, z) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
-                                checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, x, change.value.to_radians(), z)
-                        }),
-                    ),
-
-                    text("Z"),
-                    (
-                        myslider(-90.0, 0.0, 90.0, 2),
-                        observe(|change: On<ValueChange<f32>>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
-                                let (x, y, _) = checkerboard.rotation.to_euler(EulerRot::XYZEx);
-                                checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, change.value.to_radians())
-                        }),
-                    ),
-                ]
+              vec3_node("Rotation (XYZEx)", ["X", "Y", "Z"], -90. * Vec3::ONE, Vec3::ZERO, Vec3::ONE * 90., IVec3::ONE * 2),
+              observe(
+                  |vec3: On<Vec3Event>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
+                      let [x,y,z] = vec3.value.to_array();
+                      checkerboard.rotation = Quat::from_euler(EulerRot::XYZEx, x.to_radians(), y.to_radians(), z.to_radians());
+                  }
+              ),
             ),
             (
                 Node {
@@ -881,39 +821,30 @@ fn material_node() -> impl Bundle {
                 myslider(0.0, 0.5, 1.0, 2),
                 use_material(|m, v| m.clearcoat_perceptual_roughness = v),
             ),
-            text("Color"),
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4.),
-                    ..default()
-                },
-                children![
-                    text("R"),
-                    (
-                        myslider(0.0, 0.88, 1.0, 2),
-                        use_material(
-                            |m, v| m.base_color = m.base_color.to_linear().with_red(v).into()
-                        ),
-                    ),
-                    text("G"),
-                    (
-                        myslider(0.0, 0.88, 1.0, 2),
-                        use_material(
-                            |m, v| m.base_color = m.base_color.to_linear().with_green(v).into()
-                        ),
-                    ),
-                    text("B"),
-                    (
-                        myslider(0.0, 0.88, 1.0, 2),
-                        use_material(
-                            |m, v| m.base_color = m.base_color.to_linear().with_blue(v).into()
-                        ),
-                    ),
-                ]
+                vec3_node(
+                    "Color",
+                    ["R", "G", "B"],
+                    Vec3::ZERO,
+                    Vec3::splat(0.88),
+                    Vec3::ONE,
+                    IVec3::ONE * 2
+                ),
+                observe(
+                    |vec3: On<Vec3Event>,
+                     material: Single<
+                        &mut MeshMaterial3d<StandardMaterial>,
+                        With<Checkerboard>,
+                    >,
+                     mut materials: ResMut<Assets<StandardMaterial>>| {
+                        let Some(material) = materials.get_mut(material.0.id()) else {
+                            warn!("no material via {}", material.0.id());
+                            return;
+                        };
+
+                        material.base_color = Srgba::from_vec3(vec3.value).into();
+                    }
+                ),
             ),
             // Decal
             text_big("Decal"),
@@ -1059,99 +990,152 @@ fn ui_flex_col() -> impl Bundle {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, EntityEvent)]
+#[entity_event(auto_propagate)]
+pub struct Vec3Event {
+    #[event_target]
+    pub source: Entity,
+    pub value: Vec3,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Channel {
+    X,
+    Y,
+    Z,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, EntityEvent)]
+#[entity_event(auto_propagate)]
+pub struct ChannelValueChange {
+    #[event_target]
+    pub source: Entity,
+    pub channel: Channel,
+    pub value: f32,
+}
+
+fn vec3_node(
+    label: &str,
+    sub_labels: [&str; 3],
+    mins: Vec3,
+    default_values: Vec3,
+    maxs: Vec3,
+    precisions: IVec3,
+) -> impl Bundle {
+    let [x, y, z] = sub_labels;
+    let [min_x, min_y, min_z] = mins.to_array();
+    let [def_x, def_y, def_z] = default_values.to_array();
+    let [max_x, max_y, max_z] = maxs.to_array();
+    let [prec_x, prec_y, prec_z] = precisions.to_array();
+
+    (
+        ui_flex_col(),
+        observe(
+            move |change: On<ChannelValueChange>,
+                  mut commands: Commands,
+                  mut cached: Local<Option<Vec3>>| {
+                info!("Yayzah {change:?}");
+                let ChannelValueChange {
+                    channel,
+                    value,
+                    source,
+                } = change.event();
+                let cached = cached.get_or_insert(default_values);
+
+                match channel {
+                    Channel::X => cached.x = *value,
+                    Channel::Y => cached.y = *value,
+                    Channel::Z => cached.z = *value,
+                }
+
+                commands.trigger(Vec3Event {
+                    source: *source,
+                    value: *cached,
+                });
+            },
+        ),
+        children![
+            text_big(label),
+            (
+                ui_flex_row(),
+                children![
+                    text(x),
+                    (
+                        myslider(min_x, def_x, max_x, prec_x),
+                        observe(|change: On<ValueChange<f32>>, mut commands: Commands| {
+                            commands.trigger(ChannelValueChange {
+                                source: change.source,
+                                value: change.value,
+                                channel: Channel::X,
+                            });
+                        })
+                    ),
+                    text(y),
+                    (
+                        myslider(min_y, def_y, max_y, prec_y),
+                        observe(|change: On<ValueChange<f32>>, mut commands: Commands| {
+                            commands.trigger(ChannelValueChange {
+                                source: change.source,
+                                value: change.value,
+                                channel: Channel::Y,
+                            });
+                        })
+                    ),
+                    text(z),
+                    (
+                        myslider(min_z, def_z, max_z, prec_z),
+                        observe(|change: On<ValueChange<f32>>, mut commands: Commands| {
+                            commands.trigger(ChannelValueChange {
+                                source: change.source,
+                                value: change.value,
+                                channel: Channel::Z,
+                            });
+                        })
+                    ),
+                ],
+            ),
+        ],
+    )
+}
+
 fn light_node() -> impl Bundle {
     tab_node(
         UiTabVariant::Light,
         children![
             text_big("Light"),
-            text("Direction"),
-            // Direction XYZ
+            // Direction
             (
-                ui_flex_row(),
-                children![
-                    text("X"),
-                    (
-                        myslider(0.0, 100.0, 360.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
-                                info!("updating light {change:#?}");
-                                for mut t in &mut lights {
-                                    let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, change.value.to_radians(), y, z)
-                                }
-                            }
-                        )
-                    ),
-                    text("Y"),
-                    (
-                        myslider(0.0, 100.0, 360.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
-                                info!("updating light {change:#?}");
-                                for mut t in &mut lights {
-                                    let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, change.value.to_radians(), z)
-                                }
-                            }
-                        )
-                    ),
-                    text("Z"),
-                    (
-                        myslider(0.0, 100.0, 360.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
-                                info!("updating light {change:#?}");
-                                for mut t in &mut lights {
-                                    let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
-                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, change.value.to_radians())
-                                }
-                            }
-                        )
-                    ),
-                ]
+              vec3_node("Direction", ["X", "Y", "Z"], Vec3::ZERO, Vec3::splat(100.), Vec3::splat(360.), IVec3::splat(2)),
+              observe(
+                  |vec3: On<Vec3Event>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
+                      let [x,y,z] = vec3.value.to_array();
+                      let rotation = Quat::from_euler(EulerRot::XYZEx, x.to_radians(), y.to_radians(), z.to_radians());
+                      for mut t in &mut lights {
+                          t.rotation = rotation;
+                      }
+                  }
+              ),
             ),
             // Direction RGB
             (
-                ui_flex_row(),
-                children![
-                    text("R"),
-                    (
-                        myslider(0.0, 0.8, 1.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
-                                info!("updating light {change:#?}");
-                                for mut l in &mut lights {
-                                    l.color = l.color.to_linear().with_red(change.value).into();
-                                }
-                            }
-                        )
-                    ),
-                    text("G"),
-                    (
-                        myslider(0.0, 0.8, 1.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
-                                info!("updating light {change:#?}");
-                                for mut l in &mut lights {
-                                    l.color = l.color.to_linear().with_green(change.value).into();
-                                }
-                            }
-                        )
-                    ),
-                    text("B"),
-                    (
-                        myslider(0.0, 0.8, 1.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut DirectionalLight>| {
-                                info!("updating light {change:#?}");
-                                for mut l in &mut lights {
-                                    l.color = l.color.to_linear().with_blue(change.value).into();
-                                }
-                            }
-                        )
-                    ),
-                ]
+                vec3_node(
+                    "Color",
+                    ["R", "G", "B"],
+                    Vec3::ZERO,
+                    Vec3::splat(0.8),
+                    Vec3::ONE,
+                    IVec3::ONE * 2
+                ),
+                observe(
+                    |vec3: On<Vec3Event>,
+                    mut lights: Query<&mut DirectionalLight>| {
+                        for mut l in &mut lights {
+                            l.color = Srgba::from_vec3(vec3.value).into();
+                        }
+                    }
+                ),
             ),
+            // Direction RGB
             text("Point"),
             (
                 ui_flex_row(),
@@ -1244,24 +1228,6 @@ fn light_node() -> impl Bundle {
 }
 
 fn camera_node() -> impl Bundle {
-    // let insert_or_remove_depth_of_field = commands.register_system(
-    //     |change: In<ValueChange<bool>>,
-    //      camera: Single<Entity, (With<Camera>, With<Camera3d>)>,
-    //      mut commands: Commands| {
-    //         info!("Depth of field to {}", change.value);
-
-    //         let checkbox = change.source;
-
-    //         if change.value {
-    //             commands.entity(checkbox).insert(Checked);
-    //             commands.entity(*camera).insert(camera_depth_of_field());
-    //         } else {
-    //             commands.entity(checkbox).remove::<Checked>();
-    //             commands.entity(*camera).remove::<DepthOfField>();
-    //         }
-    //     },
-    // );
-
     // Wrapper component to hold render resolution
     #[derive(Debug, Component)]
     struct RenderResolutionComponent(RenderResolution);
@@ -1287,6 +1253,14 @@ fn camera_node() -> impl Bundle {
     tab_node(
         UiTabVariant::Camera,
         children![
+            (
+            vec3_node("Test vec3", ["aa", "bb", "cc"], Vec3::ZERO, Vec3::ONE, Vec3::ONE*2., IVec3::ONE),
+            observe(
+                |vec3: On<Vec3Event>| {
+                    info!("v3: {vec3:?}");
+                }
+            ),
+            ),
             text_big("Position"),
             (
                 ui_flex_row(),
@@ -1327,12 +1301,6 @@ fn camera_node() -> impl Bundle {
                             min: 0.0,
                             value: 0.01,
                             max: 3.0,
-                            // on_change: slider_component::<Transform, With<Camera3d>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         light_transform.translation.z = value;
-                            //     }
-                            // ),
                         },
                         SliderPrecision(2),
                     ),
@@ -1340,30 +1308,49 @@ fn camera_node() -> impl Bundle {
             ),
             // Projection
             text_big("Projection"),
-            text("Field of View (degrees)"),
             (
                 ui_flex_row(),
-                children![slider(
-                    SliderProps {
-                        min: 10.0,
-                        value: 45.0,
-                        max: 135.0,
-                        // on_change: slider_component::<Projection, With<Camera3d>>(
-                        //     commands,
-                        //     |projection, value| {
-                        //         let perspective = match projection {
-                        //             Projection::Perspective(p) => p,
-                        //             _ => {
-                        //                 unimplemented!();
-                        //             }
-                        //         };
+                children![
+                    text("Field of View (degrees)"),
+                    (
+                        myslider(10.0, 45.0, 135.0, 1),
+                            observe(
+                                |change: On<ValueChange<f32>>, mut projections: Query<&mut Projection, With<Camera3d>>| {
+                                    info!("updating fov {change:#?}");
+                                    for mut proj in &mut projections {
+                                        let perspective = match *proj {
+                                            Projection::Perspective(ref mut p) => p,
+                                            _ => {
+                                                unimplemented!();
+                                            }
+                                        };
 
-                        //         perspective.fov = value.to_radians();
-                        //     }
-                        // ),
-                    },
-                    SliderPrecision(1),
-                ),]
+                                        perspective.fov = change.value.to_radians();
+                                    }
+                                }
+                            ),
+                    ),
+                    // slider(
+                    // SliderProps {
+                    //     min: 10.0,
+                    //     value: 45.0,
+                    //     max: 135.0,
+                    //     // on_change: slider_component::<Projection, With<Camera3d>>(
+                    //     //     commands,
+                    //     //     |projection, value| {
+                    //     //         let perspective = match projection {
+                    //     //             Projection::Perspective(p) => p,
+                    //     //             _ => {
+                    //     //                 unimplemented!();
+                    //     //             }
+                    //     //         };
+
+                    //     //         perspective.fov = value.to_radians();
+                    //     //     }
+                    //     // ),
+                    // },
+                    // SliderPrecision(1),
+                ]
             ),
             // DoF
             (
@@ -1371,57 +1358,56 @@ fn camera_node() -> impl Bundle {
                 children![
                     text_big("Depth of Field"),
                     (
-                        checkbox(Checked, Spawn((Text::new("Enabled"), ThemedText))),
-                        observe(|h: On<Activate>| { info!("hehe {h:?}") }),
-                        observe(|h: On<ValueChange<bool>>| { info!("hehe2 {h:?}") })
+                        checkbox((), Spawn((Text::new("Enabled"), ThemedText))),
+                        observe(checkbox_self_update),
+                        observe(|change: On<ValueChange<bool>>, mut commands: Commands, camera: Single<Entity, (With<Camera>, With<Camera3d>)>| {
+                            let mut cmds = commands.entity(*camera);
+                            if change.value {
+                                cmds
+                                    .insert(camera_depth_of_field());
+                            } else {
+                                cmds.remove::<DepthOfField>();
+                            }
+                        }),
                     ),
                     // Focal distance node
                     text("Focal Distance"),
-                    slider(
-                        SliderProps {
-                            min: 0.3,
-                            value: 1.43,
-                            max: 10.0,
-                            // on_change: slider_component::<DepthOfField, ()>(
-                            //     commands,
-                            //     |dof, value| {
-                            //         dof.focal_distance = value;
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
+                    (
+                        myslider(0.3, 1.43, 10.0, 2),
+                        observe(
+                            |change: On<ValueChange<f32>>, mut dofs: Query<&mut DepthOfField>| {
+                                info!("updating focal distance {change:#?}");
+                                for mut dof in &mut dofs {
+                                    dof.focal_distance = change.value;
+                                }
+                            }
+                        )
                     ),
                     // Sensor height node
                     text("Sensor Height (mm)"),
-                    slider(
-                        SliderProps {
-                            min: 5.0,
-                            value: 10.18,
-                            max: 50.0,
-                            // on_change: slider_component::<DepthOfField, ()>(
-                            //     commands,
-                            //     |dof, value| {
-                            //         dof.sensor_height = value * 1e-3; // mm to meters
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
+                    (
+                        myslider(5.0, 10.18, 50.0, 2),
+                            observe(
+                                |change: On<ValueChange<f32>>, mut dofs: Query<&mut DepthOfField>| {
+                                        info!("updating sensor height {change:#?}");
+                                        for mut dof in &mut dofs {
+                                            dof.sensor_height = change.value * 1e-3; // mm to meters
+                                        }
+                                    }
+                                )
                     ),
                     // F-stops node
                     text("F-stops"),
-                    slider(
-                        SliderProps {
-                            min: 0.1,
-                            value: 2.5,
-                            max: 3.0,
-                            // on_change: slider_component::<DepthOfField, ()>(
-                            //     commands,
-                            //     |dof, value| {
-                            //         dof.aperture_f_stops = value;
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(1),
+                    (
+                        myslider(0.1, 2.5, 3.0, 1),
+                            observe(
+                                |change: On<ValueChange<f32>>, mut dofs: Query<&mut DepthOfField>| {
+                                        info!("updating F-stops {change:#?}");
+                                        for mut dof in &mut dofs {
+                                            dof.aperture_f_stops = change.value;
+                                        }
+                                    }
+                                )
                     ),
                 ],
             ),
