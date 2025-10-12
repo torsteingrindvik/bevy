@@ -70,7 +70,7 @@ use bevy::ui_widgets::{
     checkbox_self_update, observe, slider_self_update, Activate, Checkbox, RadioButton, RadioGroup,
     Slider, UiWidgetsPlugins, ValueChange,
 };
-use bevy::window::PresentMode;
+use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
     asset::RenderAssetUsages, color::palettes, core_pipeline::Skybox, mesh::Indices,
     render::render_resource::PrimitiveTopology,
@@ -1105,7 +1105,7 @@ fn light_node() -> impl Bundle {
             text_big("Light"),
             // Direction
             (
-              vec3_node("Direction", ["X", "Y", "Z"], Vec3::ZERO, Vec3::splat(100.), Vec3::splat(360.), IVec3::splat(2)),
+              vec3_node("Direction", ["X", "Y", "Z"], Vec3::ZERO, Vec3::new(45., 0., 120.), Vec3::splat(360.), IVec3::splat(2)),
               observe(
                   |vec3: On<Vec3Event>, mut lights: Query<&mut Transform, With<DirectionalLight>>| {
                       let [x,y,z] = vec3.value.to_array();
@@ -1130,99 +1130,43 @@ fn light_node() -> impl Bundle {
                     |vec3: On<Vec3Event>,
                     mut lights: Query<&mut DirectionalLight>| {
                         for mut l in &mut lights {
+                            info!("dir light color {l:?}");
                             l.color = Srgba::from_vec3(vec3.value).into();
                         }
                     }
                 ),
             ),
-            // Direction RGB
-            text("Point"),
+            // Point light direction
             (
-                ui_flex_row(),
-                children![
-                    text("X"),
-                    (
-                        myslider(0.0, 100.0, 360.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
-                                info!("updating light {change:#?}");
-                                for mut t in &mut lights {
-                                    let (_, y, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, change.value.to_radians(), y, z)
-                                }
-                            }
-                        )
-                    ),
-                    text("Y"),
-                    (
-                        myslider(0.0, 100.0, 360.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
-                                info!("updating light {change:#?}");
-                                for mut t in &mut lights {
-                                    let (x, _, z) = t.rotation.to_euler(EulerRot::XYZEx);
-                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, change.value.to_radians(), z)
-                                }
-                            }
-                        )
-                    ),
-                    text("Z"),
-                    (
-                        myslider(0.0, 100.0, 360.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut Transform, With<PointLight>>| {
-                                info!("updating light {change:#?}");
-                                for mut t in &mut lights {
-                                    let (x, y, _) = t.rotation.to_euler(EulerRot::XYZEx);
-                                    t.rotation = Quat::from_euler(EulerRot::XYZEx, x, y, change.value.to_radians())
-                                }
-                            }
-                        )
-                    ),
-                ]
+              vec3_node("Translation (point)", ["X", "Y", "Z"], Vec3::splat(-3.), Vec3::ONE, Vec3::splat(3.), IVec3::splat(2)),
+              observe(
+                  |vec3: On<Vec3Event>, mut lights: Query<&mut Transform, With<PointLight>>| {
+                      for mut t in &mut lights {
+                          t.translation = vec3.value;
+                      }
+                  }
+              ),
             ),
             // Point RGB
             (
-                ui_flex_row(),
-                children![
-                    text("R"),
-                    (
-                        myslider(0.0, 0.8, 1.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut PointLight>| {
-                                info!("updating light {change:#?}");
-                                for mut l in &mut lights {
-                                    l.color = l.color.to_linear().with_red(change.value).into();
-                                }
-                            }
-                        )
-                    ),
-                    text("G"),
-                    (
-                        myslider(0.0, 0.8, 1.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut PointLight>| {
-                                info!("updating light {change:#?}");
-                                for mut l in &mut lights {
-                                    l.color = l.color.to_linear().with_green(change.value).into();
-                                }
-                            }
-                        )
-                    ),
-                    text("B"),
-                    (
-                        myslider(0.0, 0.8, 1.0, 2),
-                        observe(
-                            |change: On<ValueChange<f32>>, mut lights: Query<&mut PointLight>| {
-                                info!("updating light {change:#?}");
-                                for mut l in &mut lights {
-                                    l.color = l.color.to_linear().with_blue(change.value).into();
-                                }
-                            }
-                        )
-                    ),
-                ]
+                vec3_node(
+                    "Color (point)",
+                    ["R", "G", "B"],
+                    Vec3::ZERO,
+                    Vec3::splat(0.8),
+                    Vec3::ONE,
+                    IVec3::ONE * 2
+                ),
+                observe(
+                    |vec3: On<Vec3Event>,
+                    mut lights: Query<&mut PointLight>| {
+                        for mut l in &mut lights {
+                            l.color = Srgba::from_vec3(vec3.value).into();
+                        }
+                    }
+                ),
             ),
+
         ],
     )
 }
@@ -1232,79 +1176,16 @@ fn camera_node() -> impl Bundle {
     #[derive(Debug, Component)]
     struct RenderResolutionComponent(RenderResolution);
 
-    // let radios_set_render_resolution = commands.register_system(
-    //     |ent: In<Activate>,
-    //      child: Query<(Option<&ChildOf>, Option<&Children>)>,
-    //      radio: Query<&RenderResolutionComponent>,
-    //      mut render_res: ResMut<RenderResolution>,
-    //      mut commands: Commands| {
-    //         let radio_button_entity = ent.0.entity;
-    //         commands.entity(radio_button_entity).insert(Checked);
-
-    //         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-    //             info!("sibling of {radio_button_entity}: {sibling_radio_button}");
-    //             commands.entity(sibling_radio_button).remove::<Checked>();
-    //         }
-
-    //         *render_res = radio.get(radio_button_entity).unwrap().0;
-    //     },
-    // );
-
     tab_node(
         UiTabVariant::Camera,
         children![
             (
-            vec3_node("Test vec3", ["aa", "bb", "cc"], Vec3::ZERO, Vec3::ONE, Vec3::ONE*2., IVec3::ONE),
-            observe(
-                |vec3: On<Vec3Event>| {
-                    info!("v3: {vec3:?}");
-                }
-            ),
-            ),
-            text_big("Position"),
-            (
-                ui_flex_row(),
-                children![
-                    text("X"),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.43,
-                            max: 3.0,
-                            // on_change: slider_component::<Transform, With<Camera3d>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         light_transform.translation.x = value;
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
-                    text("Y"),
-                    slider(
-                        SliderProps {
-                            min: 0.1,
-                            value: 0.81,
-                            max: 3.0,
-                            // on_change: slider_component::<Transform, With<Camera3d>>(
-                            //     commands,
-                            //     |light_transform, value| {
-                            //         light_transform.translation.y = value;
-                            //     }
-                            // ),
-                        },
-                        SliderPrecision(2),
-                    ),
-                    text("Z"),
-                    slider(
-                        SliderProps {
-                            min: 0.0,
-                            value: 0.01,
-                            max: 3.0,
-                        },
-                        SliderPrecision(2),
-                    ),
-                ]
+                vec3_node("Position", ["X", "Y", "Z"], Vec3::ZERO, Vec3::new(0.43, 0.81, 0.01), Vec3::splat(3.), IVec3::splat(2)),
+                observe(
+                    |pos: On<Vec3Event>, mut camera: Single<&mut Transform, With<Camera3d>>| {
+                        camera.translation = pos.value;
+                    }
+                ),
             ),
             // Projection
             text_big("Projection"),
@@ -1330,26 +1211,6 @@ fn camera_node() -> impl Bundle {
                                 }
                             ),
                     ),
-                    // slider(
-                    // SliderProps {
-                    //     min: 10.0,
-                    //     value: 45.0,
-                    //     max: 135.0,
-                    //     // on_change: slider_component::<Projection, With<Camera3d>>(
-                    //     //     commands,
-                    //     //     |projection, value| {
-                    //     //         let perspective = match projection {
-                    //     //             Projection::Perspective(p) => p,
-                    //     //             _ => {
-                    //     //                 unimplemented!();
-                    //     //             }
-                    //     //         };
-
-                    //     //         perspective.fov = value.to_radians();
-                    //     //     }
-                    //     // ),
-                    // },
-                    // SliderPrecision(1),
                 ]
             ),
             // DoF
@@ -1359,7 +1220,6 @@ fn camera_node() -> impl Bundle {
                     text_big("Depth of Field"),
                     (
                         checkbox((), Spawn((Text::new("Enabled"), ThemedText))),
-                        observe(checkbox_self_update),
                         observe(|change: On<ValueChange<bool>>, mut commands: Commands, camera: Single<Entity, (With<Camera>, With<Camera3d>)>| {
                             let mut cmds = commands.entity(*camera);
                             if change.value {
@@ -1387,27 +1247,27 @@ fn camera_node() -> impl Bundle {
                     text("Sensor Height (mm)"),
                     (
                         myslider(5.0, 10.18, 50.0, 2),
-                            observe(
-                                |change: On<ValueChange<f32>>, mut dofs: Query<&mut DepthOfField>| {
-                                        info!("updating sensor height {change:#?}");
-                                        for mut dof in &mut dofs {
-                                            dof.sensor_height = change.value * 1e-3; // mm to meters
-                                        }
+                        observe(
+                            |change: On<ValueChange<f32>>, mut dofs: Query<&mut DepthOfField>| {
+                                    info!("updating sensor height {change:#?}");
+                                    for mut dof in &mut dofs {
+                                        dof.sensor_height = change.value * 1e-3; // mm to meters
                                     }
-                                )
+                                }
+                            )
                     ),
                     // F-stops node
                     text("F-stops"),
                     (
                         myslider(0.1, 2.5, 3.0, 1),
-                            observe(
-                                |change: On<ValueChange<f32>>, mut dofs: Query<&mut DepthOfField>| {
-                                        info!("updating F-stops {change:#?}");
-                                        for mut dof in &mut dofs {
-                                            dof.aperture_f_stops = change.value;
-                                        }
+                        observe(
+                            |change: On<ValueChange<f32>>, mut dofs: Query<&mut DepthOfField>| {
+                                    info!("updating F-stops {change:#?}");
+                                    for mut dof in &mut dofs {
+                                        dof.aperture_f_stops = change.value;
                                     }
-                                )
+                                }
+                            )
                     ),
                 ],
             ),
@@ -1419,9 +1279,12 @@ fn camera_node() -> impl Bundle {
                     column_gap: px(4),
                     ..default()
                 },
-                RadioGroup {
-                    // on_change: Callback::System(radios_set_render_resolution),
-                },
+                RadioGroup,
+                observe(|activate: On<ValueChange<Entity>>, mut button: Query<&RenderResolutionComponent, With<RadioButton>>, mut render_res:
+                    ResMut<RenderResolution>| {
+                    // RadioGroup emits ValueChange<Entity> with value the button that changed
+                    *render_res = button.get_mut(activate.event().value).unwrap().0;
+                }),
                 children![
                     text("Resolution"),
                     radio(
@@ -1485,125 +1348,90 @@ fn debug_node() -> impl Bundle {
     #[derive(Debug, Component)]
     struct DebugPickingModeComponent(DebugPickingMode);
 
-    // let radios_set_picking_mode = commands.register_system(
-    //     |ent: In<Activate>,
-    //      child: Query<(Option<&ChildOf>, Option<&Children>)>,
-    //      radio: Query<&DebugPickingModeComponent>,
-    //      mut picking_debug: ResMut<DebugPickingMode>,
-    //      mut commands: Commands| {
-    //         let radio_button_entity = ent.0.entity;
-    //         commands.entity(radio_button_entity).insert(Checked);
-
-    //         for sibling_radio_button in child.iter_siblings(radio_button_entity) {
-    //             info!("sibling of {radio_button_entity}: {sibling_radio_button}");
-    //             commands.entity(sibling_radio_button).remove::<Checked>();
-    //         }
-
-    //         *picking_debug = radio.get(radio_button_entity).unwrap().0;
-    //     },
-    // );
-
     tab_node(
         UiTabVariant::Debug,
         children![
             text_big("Debug"),
-            checkbox(
-                (
-                    // CheckboxProps {
-                    //     // on_change: checkbox_resource::<GizmoConfigStore>(
-                    //     //     commands,
-                    //     //     |store, checked| {
-                    //     //         let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
-                    //     //         config.enabled = checked;
-                    //     //     }
-                    //     // )
-                    // },
-                    Checked
+            (
+                checkbox((Checked), Spawn((Text::new("Gizmos enabled"), ThemedText))),
+                observe(
+                    |change: On<ValueChange<bool>>, mut config: ResMut<GizmoConfigStore>| {
+                        let (config, _) = config.config_mut::<DefaultGizmoConfigGroup>();
+                        config.enabled = change.value;
+                    }
                 ),
-                Spawn((Text::new("Gizmos enabled"), ThemedText))
             ),
-            checkbox(
-                // CheckboxProps {
-                //     // on_change: checkbox_component::<ShowAxes, ()>(
-                //     //     commands,
-                //     //     |show_axes, checked| {
-                //     //         show_axes.enabled = checked;
-                //     //     }
-                //     // )
-                // },
-                (),
-                Spawn((Text::new("Draw Axes"), ThemedText))
+            (
+                checkbox((), Spawn((Text::new("Draw Axes"), ThemedText))),
+                observe(
+                    |change: On<ValueChange<bool>>, mut show_axes: Query<&mut ShowAxes>| {
+                        for mut show in &mut show_axes {
+                            show.enabled = change.value;
+                        }
+                    }
+                )
             ),
-            checkbox(
-                // CheckboxProps {
-                //     // on_change: checkbox_resource::<ShowCheckerboardCornerGizmos>(
-                //     //     commands,
-                //     //     |show, checked| {
-                //     //         show.0 = checked;
-                //     //     }
-                //     // )
-                // },
-                (),
-                Spawn((Text::new("Checkerboard corner world gizmos"), ThemedText))
-            ),
-            checkbox(
-                // CheckboxProps {
-                //     // on_change: checkbox_resource::<ShowCheckerboardCornerViewportSpheres>(
-                //     //     commands,
-                //     //     |show, checked| {
-                //     //         show.0 = checked;
-                //     //     }
-                //     // )
-                // },
-                (),
-                Spawn((
-                    Text::new("Checkerboard corner viewport spheres"),
-                    ThemedText
-                ))
-            ),
-            checkbox(
-                // CheckboxProps {
-                //     // on_change: checkbox_resource::<FpsOverlayConfig>(
-                //     //     commands,
-                //     //     |config, checked| {
-                //     //         config.enabled = checked;
-                //     //         config.frame_time_graph_config.enabled = checked;
-                //     //     }
-                //     // )
-                // },
-                (),
-                Spawn((Text::new("Show FPS"), ThemedText))
-            ),
-            checkbox(
-                (
-                    // CheckboxProps {
-                    //     // on_change: checkbox_component::<Window, With<PrimaryWindow>>(
-                    //     //     commands,
-                    //     //     |window, checked| {
-                    //     //         window.present_mode = if checked {
-                    //     //             PresentMode::AutoVsync
-                    //     //         } else {
-                    //     //             PresentMode::AutoNoVsync
-                    //     //         };
-                    //     //     }
-                    //     // )
-                    // },
+            (
+                checkbox(
                     (),
-                    Checked
+                    Spawn((Text::new("Checkerboard corner world gizmos"), ThemedText))
                 ),
-                Spawn((Text::new("Vsync"), ThemedText))
+                observe(
+                    |change: On<ValueChange<bool>>,
+                     mut show: ResMut<ShowCheckerboardCornerGizmos>| {
+                        show.0 = change.value;
+                    }
+                )
+            ),
+            (
+                checkbox(
+                    (),
+                    Spawn((
+                        Text::new("Checkerboard corner viewport spheres"),
+                        ThemedText
+                    ))
+                ),
+                observe(
+                    |change: On<ValueChange<bool>>,
+                     mut show: ResMut<ShowCheckerboardCornerViewportSpheres>| {
+                        show.0 = change.value;
+                    }
+                )
+            ),
+            (
+                checkbox((), Spawn((Text::new("Show FPS"), ThemedText))),
+                observe(
+                    |change: On<ValueChange<bool>>, mut config: ResMut<FpsOverlayConfig>| {
+                        config.enabled = change.value;
+                        config.frame_time_graph_config.enabled = change.value;
+                    }
+                )
+            ),
+            (
+                checkbox(Checked, Spawn((Text::new("Vsync"), ThemedText))),
+                observe(
+                    |change: On<ValueChange<bool>>,
+                     mut window: Single<&mut Window, With<PrimaryWindow>>| {
+                        window.present_mode = if change.value {
+                            PresentMode::AutoVsync
+                        } else {
+                            PresentMode::AutoNoVsync
+                        };
+                    }
+                )
             ),
             // Picking
             (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Column,
-                    column_gap: px(4),
-                    ..default()
-                },
-                RadioGroup {
-                    // on_change: Callback::System(radios_set_picking_mode),
-                },
+                ui_flex_col(),
+                RadioGroup,
+                observe(
+                    |activate: On<ValueChange<Entity>>,
+                     mut button: Query<&DebugPickingModeComponent, With<RadioButton>>,
+                     mut picking_debug: ResMut<DebugPickingMode>| {
+                        // RadioGroup emits ValueChange<Entity> with value the button that changed
+                        *picking_debug = button.get_mut(activate.event().value).unwrap().0;
+                    }
+                ),
                 children![
                     text("Picking"),
                     radio(
@@ -1625,33 +1453,30 @@ fn debug_node() -> impl Bundle {
             ),
             // UI debug
             text_big("UI debug"),
-            checkbox(
-                // CheckboxProps {
-                //     // on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
-                //     //     opts.enabled = checked;
-                //     // })
-                // },
-                (),
-                Spawn((Text::new("Enabled"), ThemedText))
+            (
+                checkbox((), Spawn((Text::new("Enabled"), ThemedText))),
+                observe(
+                    |change: On<ValueChange<bool>>, mut options: ResMut<UiDebugOptions>| {
+                        options.enabled = change.value;
+                    }
+                ),
             ),
-            checkbox(
-                // CheckboxProps {
-                //     // on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
-                //     //     opts.show_hidden = checked;
-                //     // })
-                // },
-                (),
-                Spawn((Text::new("Show hidden"), ThemedText))
+            (
+                checkbox((), Spawn((Text::new("Show hidden"), ThemedText))),
+                observe(
+                    |change: On<ValueChange<bool>>, mut options: ResMut<UiDebugOptions>| {
+                        options.show_hidden = change.value;
+                    }
+                ),
             ),
-            checkbox(
-                // CheckboxProps {
-                //     // on_change: checkbox_resource::<UiDebugOptions>(commands, |opts, checked| {
-                //     //     opts.show_clipped = checked;
-                //     // })
-                // },
-                (),
-                Spawn((Text::new("Show clipped"), ThemedText))
-            )
+            (
+                checkbox((), Spawn((Text::new("Show clipped"), ThemedText))),
+                observe(
+                    |change: On<ValueChange<bool>>, mut options: ResMut<UiDebugOptions>| {
+                        options.show_clipped = change.value;
+                    }
+                ),
+            ),
         ],
     )
 }
