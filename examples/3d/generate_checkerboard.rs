@@ -1,5 +1,7 @@
 //! The checkmate!
 
+#![allow(missing_docs)]
+
 // TODO:
 // - UVs are not working with clearcoat normal map, investigate
 //   - Is there a way to debug view it?
@@ -20,7 +22,6 @@
 // - CI to publish to webpage
 // - RGB use actual feathers color widgets
 //   - There's no actual 2D picker
-// - FreeCam enabled checkbox
 
 // Scratchpad:
 //
@@ -67,8 +68,7 @@ use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::{Checkable, Checked};
 use bevy::ui_widgets::{
-    checkbox_self_update, observe, slider_self_update, Activate, AddObserver, Checkbox,
-    RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
+    observe, Activate, AddObserver, RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
@@ -1188,6 +1188,10 @@ fn camera_node() -> impl Bundle {
                     }
                 ),
             ),
+            observed_checkbox((), "Freecam", |change: On<ValueChange<bool>>, mut freecam: Single<&mut FreeCam,  With<Camera3d>>| {
+                info!("freecam changed: {change:?}");
+                freecam.enabled = change.value;
+            }),
             // Projection
             text_big("Projection"),
             (
@@ -1348,7 +1352,7 @@ fn observed_checkbox<B: Bundle, M, I: IntoObserverSystem<ValueChange<bool>, B, M
     obs: I,
 ) -> impl Bundle
 where
-    AddObserver<ValueChange<bool>, B, M, I>: bevy::prelude::Bundle,
+    AddObserver<ValueChange<bool>, B, M, I>: Bundle,
 {
     (
         checkbox(extras, Spawn((Text::new(label), ThemedText))),
@@ -1366,7 +1370,7 @@ fn debug_node() -> impl Bundle {
         children![
             text_big("Debug"),
             (
-                checkbox((Checked), Spawn((Text::new("Gizmos enabled"), ThemedText))),
+                checkbox(Checked, Spawn((Text::new("Gizmos enabled"), ThemedText))),
                 observe(
                     |change: On<ValueChange<bool>>, mut config: ResMut<GizmoConfigStore>| {
                         let (config, _) = config.config_mut::<DefaultGizmoConfigGroup>();
