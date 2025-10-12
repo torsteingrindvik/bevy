@@ -67,8 +67,8 @@ use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::{Checkable, Checked};
 use bevy::ui_widgets::{
-    checkbox_self_update, observe, slider_self_update, Activate, Checkbox, RadioButton, RadioGroup,
-    Slider, UiWidgetsPlugins, ValueChange,
+    checkbox_self_update, observe, slider_self_update, Activate, AddObserver, Checkbox,
+    RadioButton, RadioGroup, Slider, UiWidgetsPlugins, ValueChange,
 };
 use bevy::window::{PresentMode, PrimaryWindow};
 use bevy::{
@@ -93,6 +93,7 @@ use bevy::{
     dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
     text::FontSmoothing,
 };
+use bevy_ecs::system::IntoObserverSystem;
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
 use bevy_render::view::Hdr;
@@ -1218,18 +1219,16 @@ fn camera_node() -> impl Bundle {
                 ui_flex_col(),
                 children![
                     text_big("Depth of Field"),
-                    (
-                        checkbox((), Spawn((Text::new("Enabled"), ThemedText))),
-                        observe(|change: On<ValueChange<bool>>, mut commands: Commands, camera: Single<Entity, (With<Camera>, With<Camera3d>)>| {
-                            let mut cmds = commands.entity(*camera);
-                            if change.value {
-                                cmds
-                                    .insert(camera_depth_of_field());
-                            } else {
-                                cmds.remove::<DepthOfField>();
-                            }
-                        }),
-                    ),
+                    observed_checkbox((), "Enabled", |change: On<ValueChange<bool>>, mut commands: Commands, camera: Single<Entity, (With<Camera>, With<Camera3d>)>| {
+                        info!("value changed: {change:?}");
+                        let mut cmds = commands.entity(*camera);
+                        if change.value {
+                            cmds
+                                .insert(camera_depth_of_field());
+                        } else {
+                            cmds.remove::<DepthOfField>();
+                        }
+                    }),
                     // Focal distance node
                     text("Focal Distance"),
                     (
@@ -1341,6 +1340,20 @@ fn on_render_resolution_changed(
             warn!("could not find image for render target");
         }
     }
+}
+
+fn observed_checkbox<B: Bundle, M, I: IntoObserverSystem<ValueChange<bool>, B, M>>(
+    extras: impl Bundle,
+    label: &str,
+    obs: I,
+) -> impl Bundle
+where
+    AddObserver<ValueChange<bool>, B, M, I>: bevy::prelude::Bundle,
+{
+    (
+        checkbox(extras, Spawn((Text::new(label), ThemedText))),
+        observe(obs),
+    )
 }
 
 fn debug_node() -> impl Bundle {
