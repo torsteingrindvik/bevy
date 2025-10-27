@@ -230,7 +230,7 @@ impl Plugin for EffectStackPlugin {
             .add_render_graph_edges(
                 Core3d,
                 (
-                    Node3d::DepthOfField,
+                    Node3d::LensDistortion,
                     Node3d::PostProcessing,
                     Node3d::Tonemapping,
                 ),
@@ -241,7 +241,11 @@ impl Plugin for EffectStackPlugin {
             )
             .add_render_graph_edges(
                 Core2d,
-                (Node2d::Bloom, Node2d::PostProcessing, Node2d::Tonemapping),
+                (
+                    Node2d::LensDistortion,
+                    Node2d::PostProcessing,
+                    Node2d::Tonemapping,
+                ),
             );
     }
 }

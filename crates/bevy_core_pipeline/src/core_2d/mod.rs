@@ -21,6 +21,7 @@ pub mod graph {
         Wireframe,
         StartMainPassPostProcessing,
         Bloom,
+        LensDistortion,
         PostProcessing,
         Tonemapping,
         Fxaa,

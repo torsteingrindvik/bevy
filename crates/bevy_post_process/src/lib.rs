@@ -10,12 +10,14 @@ pub mod auto_exposure;
 pub mod bloom;
 pub mod dof;
 pub mod effect_stack;
+pub mod lens_distortion;
 pub mod motion_blur;
 pub mod msaa_writeback;
 
 use crate::{
     bloom::BloomPlugin, dof::DepthOfFieldPlugin, effect_stack::EffectStackPlugin,
-    motion_blur::MotionBlurPlugin, msaa_writeback::MsaaWritebackPlugin,
+    lens_distortion::LensDistortionPlugin, motion_blur::MotionBlurPlugin,
+    msaa_writeback::MsaaWritebackPlugin,
 };
 use bevy_app::{App, Plugin};
 
@@ -30,6 +32,7 @@ impl Plugin for PostProcessPlugin {
             BloomPlugin,
             MotionBlurPlugin,
             DepthOfFieldPlugin,
+            LensDistortionPlugin,
             EffectStackPlugin,
         ));
     }
