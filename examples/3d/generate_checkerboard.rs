@@ -52,6 +52,7 @@ use std::iter::zip;
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::camera::RenderTarget;
+use bevy::camera_controller::free_camera::FreeCameraState;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::dev_tools::picking_debug::{DebugPickingMode, DebugPickingPlugin};
@@ -76,7 +77,7 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
 };
 use bevy::{
-    camera_controller::free_cam::{FreeCam, FreeCamPlugin},
+    camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     feathers::{
         controls::{slider, SliderProps},
         dark_theme::create_dark_theme,
@@ -206,7 +207,7 @@ fn main() {
                     filter: "bevy_dev_tools=trace".into(), // Show picking logs trace level and up
                     ..default()
                 }),
-            FreeCamPlugin,
+            FreeCameraPlugin,
             DebugPickingPlugin,
             UiWidgetsPlugins,
             InputDispatchPlugin,
@@ -430,14 +431,15 @@ fn setup(
 
     let scene_image = images.add(image_render_target(1920, 1080));
 
+    let mut free_camera_state = FreeCameraState::default();
+    free_camera_state.enabled = false;
+
     // Camera in 3D space.
     commands
         .spawn((
             Camera3d::default(),
-            FreeCam {
-                enabled: false,
-                ..default()
-            },
+            FreeCamera::default(),
+            free_camera_state,
             Msaa::Off,
             Fxaa::default(), // Supports both decals and WebGPU at the same time
             Hdr,
@@ -1188,7 +1190,7 @@ fn camera_node() -> impl Bundle {
                     }
                 ),
             ),
-            observed_checkbox((), "Freecam", |change: On<ValueChange<bool>>, mut freecam: Single<&mut FreeCam,  With<Camera3d>>| {
+            observed_checkbox((), "Freecam", |change: On<ValueChange<bool>>, mut freecam: Single<&mut FreeCameraState,  With<Camera3d>>| {
                 info!("freecam changed: {change:?}");
                 freecam.enabled = change.value;
             }),

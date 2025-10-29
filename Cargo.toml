@@ -1117,7 +1117,7 @@ required-features = [
     "bevy_ui_debug",
     "jpeg",
     "bevy_dev_tools",
-    "free_cam"
+    "free_camera"
 ]
 
 [package.metadata.example.generate_checkerboard]
