@@ -49,6 +49,7 @@
 // any save to disk
 
 use std::iter::zip;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::camera::RenderTarget;
@@ -97,6 +98,7 @@ use bevy::{
 use bevy_ecs::system::IntoObserverSystem;
 use bevy_image::{ImageLoaderSettings, ImageSampler};
 use bevy_render::render_resource::TextureFormat;
+use bevy_render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy_render::view::Hdr;
 
 const UI_TEXT_MINI: f32 = 10.0;
@@ -1591,6 +1593,39 @@ fn root_node(camera_entity: Entity, scene_image: &Handle<Image>) -> impl Bundle 
     let camera = camera_node();
     let debug = debug_node();
 
+    let screenshot = (
+        button(ButtonProps::default(), (), Spawn(Text::new("Screenshot"))),
+        observe(
+            |_activate: On<Activate>,
+             camera: Single<&mut Camera, With<Camera3d>>,
+             mut commands: Commands,
+             settings: Single<&Checkerboard, With<Checkerboard>>| {
+                info!("taking screenshot..");
+
+                let t = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
+                let cols = settings.cols;
+                let rows = settings.rows;
+
+                commands.spawn(Screenshot(camera.target.clone())).observe(
+                    move |capture: On<ScreenshotCaptured>| {
+                        info!("saving screenshot capture..");
+                        capture
+                            .image
+                            .clone()
+                            .try_into_dynamic()
+                            .unwrap()
+                            .to_rgb8()
+                            .save(format!("screenshots/checkerboard_{cols}x{rows}_{t}.png"))
+                            .unwrap();
+                    },
+                );
+            },
+        ),
+    );
+
     (
         Node {
             width: percent(100),
@@ -1617,7 +1652,16 @@ fn root_node(camera_entity: Entity, scene_image: &Handle<Image>) -> impl Bundle 
                     max_width: percent(40),
                     ..default()
                 },
-                children![tabs, geometry, material, environment, light, camera, debug]
+                children![
+                    tabs,
+                    geometry,
+                    material,
+                    environment,
+                    light,
+                    camera,
+                    debug,
+                    screenshot
+                ]
             ),
             (
                 ImageNode::new(scene_image.clone()),
