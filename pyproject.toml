@@ -1,10 +1,11 @@
 [project]
-name = "generate checkerboard detector"
+name = "checkerboard-detector"
 version = "0.1.0"
-description = "Add your description here"
+description = "Runs checkerboard detection on images"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "numpy>=2.2.6",
     "opencv-python>=4.12.0.88",
     "watchdog>=6.0.0",
 ]
