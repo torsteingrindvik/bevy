@@ -66,6 +66,7 @@ use bevy::pbr::ExtendedMaterial;
 use bevy::platform::collections::HashMap;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::post_process::lens_distortion::LensDistortion;
 use bevy::prelude::*;
 use bevy::ui::widget::ImageNodeSize;
 use bevy::ui::{Checkable, Checked};
@@ -106,6 +107,10 @@ const UI_TEXT_SMALL: f32 = 12.0;
 const UI_TEXT_BIG: f32 = 16.0;
 
 const UI_ROW_GAP_PER_TAB: f32 = 8.0;
+
+const CAMERA_DEFAULT_TRANSLATION: Vec3 = Vec3::ZERO;
+const CHECKERBOARD_DEFAULT_TRANSLATION: Vec3 = Vec3::new(0., 0., -1.2); // 1.2m into the scene
+const CHECKERBOARD_DEFAULT_ROTATION_X_DEG: f32 = 90.0;
 
 #[derive(Component)]
 struct ShowAxes {
@@ -153,6 +158,7 @@ enum ChosenDecal {
 struct Checkerboard {
     rows: usize,
     cols: usize,
+    /// note: this is metric. Convert from/to mm as needed
     square_size: f32,
 }
 
@@ -281,7 +287,6 @@ fn main() {
         .add_observer(observe_slider_updates)
         .add_observer(observe_radio_updates)
         .add_observer(observe_checkbox_updates)
-        .add_observer(|ac: On<ValueChange<f32>>| info!("ac: {ac:#?}"))
         .run();
 }
 
@@ -425,11 +430,19 @@ fn setup(
         })),
         ShowAxes { enabled: false },
         checkerboard,
+        Transform::from_translation(CHECKERBOARD_DEFAULT_TRANSLATION).with_rotation(
+            Quat::from_euler(
+                EulerRot::XYZEx,
+                CHECKERBOARD_DEFAULT_ROTATION_X_DEG.to_radians(),
+                0.0,
+                0.0,
+            ),
+        ),
     ));
 
     // Transform for the camera and lighting, looking at (0,0,0) (the position of the mesh).
     let camera_and_light_transform =
-        Transform::from_xyz(0.8, 0.8, 0.8).looking_at(Vec3::ZERO, Vec3::Y);
+        Transform::from_translation(CAMERA_DEFAULT_TRANSLATION).looking_to(Dir3::NEG_Z, Dir3::Y);
 
     let scene_image = images.add(image_render_target(1920, 1080));
 
@@ -454,6 +467,7 @@ fn setup(
             camera_and_light_transform,
             Tonemapping::AcesFitted,
             Bloom::NATURAL,
+            LensDistortion::default(),
         ))
         .insert(Skybox {
             brightness: 5000.0,
@@ -737,7 +751,7 @@ fn geometry_node() -> impl Bundle {
                 )
             ),
             (
-                vec3_node("Translation", ["X", "Y", "Z"], -2. * Vec3::ONE, Vec3::ZERO, Vec3::ONE*2., IVec3::ONE * 2),
+                vec3_node("Translation", ["X", "Y", "Z"], -4. * Vec3::ONE, CHECKERBOARD_DEFAULT_TRANSLATION, Vec3::ONE*4., IVec3::ONE * 3),
                 observe(
                     |vec3: On<Vec3Event>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                         checkerboard.translation = vec3.value;
@@ -745,7 +759,7 @@ fn geometry_node() -> impl Bundle {
                 ),
             ),
             (
-              vec3_node("Rotation (XYZEx)", ["X", "Y", "Z"], -90. * Vec3::ONE, Vec3::ZERO, Vec3::ONE * 90., IVec3::ONE * 2),
+              vec3_node("Rotation (XYZEx)", ["X", "Y", "Z"], -180. * Vec3::ONE, Vec3::new(CHECKERBOARD_DEFAULT_ROTATION_X_DEG, 0.0, 0.0), Vec3::ONE * 180., IVec3::ONE * 2),
               observe(
                   |vec3: On<Vec3Event>, mut checkerboard: Single<&mut Transform, With<Checkerboard>>| {
                       let [x,y,z] = vec3.value.to_array();
@@ -1003,6 +1017,14 @@ pub struct Vec3Event {
     pub value: Vec3,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, EntityEvent)]
+#[entity_event(auto_propagate)]
+pub struct Vec2Event {
+    #[event_target]
+    pub source: Entity,
+    pub value: Vec2,
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Channel {
     X,
@@ -1039,7 +1061,7 @@ fn vec3_node(
             move |change: On<ChannelValueChange>,
                   mut commands: Commands,
                   mut cached: Local<Option<Vec3>>| {
-                info!("Yayzah {change:?}");
+                trace!("Vec3 node {change:?}");
                 let ChannelValueChange {
                     channel,
                     value,
@@ -1094,6 +1116,79 @@ fn vec3_node(
                                 source: change.source,
                                 value: change.value,
                                 channel: Channel::Z,
+                            });
+                        })
+                    ),
+                ],
+            ),
+        ],
+    )
+}
+
+fn vec2_node(
+    label: &str,
+    sub_labels: [&str; 2],
+    mins: Vec2,
+    default_values: Vec2,
+    maxs: Vec2,
+    precisions: IVec2,
+) -> impl Bundle {
+    let [x, y] = sub_labels;
+    let [min_x, min_y] = mins.to_array();
+    let [def_x, def_y] = default_values.to_array();
+    let [max_x, max_y] = maxs.to_array();
+    let [prec_x, prec_y] = precisions.to_array();
+
+    (
+        ui_flex_col(),
+        observe(
+            move |change: On<ChannelValueChange>,
+                  mut commands: Commands,
+                  mut cached: Local<Option<Vec2>>| {
+                trace!("Vec2 node {change:?}");
+                let ChannelValueChange {
+                    channel,
+                    value,
+                    source,
+                } = change.event();
+                let cached = cached.get_or_insert(default_values);
+
+                match channel {
+                    Channel::X => cached.x = *value,
+                    Channel::Y => cached.y = *value,
+                    Channel::Z => unreachable!(),
+                }
+
+                commands.trigger(Vec2Event {
+                    source: *source,
+                    value: *cached,
+                });
+            },
+        ),
+        children![
+            text_big(label),
+            (
+                ui_flex_row(),
+                children![
+                    text(x),
+                    (
+                        myslider(min_x, def_x, max_x, prec_x),
+                        observe(|change: On<ValueChange<f32>>, mut commands: Commands| {
+                            commands.trigger(ChannelValueChange {
+                                source: change.source,
+                                value: change.value,
+                                channel: Channel::X,
+                            });
+                        })
+                    ),
+                    text(y),
+                    (
+                        myslider(min_y, def_y, max_y, prec_y),
+                        observe(|change: On<ValueChange<f32>>, mut commands: Commands| {
+                            commands.trigger(ChannelValueChange {
+                                source: change.source,
+                                value: change.value,
+                                channel: Channel::Y,
                             });
                         })
                     ),
@@ -1181,21 +1276,46 @@ fn camera_node() -> impl Bundle {
     #[derive(Debug, Component)]
     struct RenderResolutionComponent(RenderResolution);
 
+    let lens_dist_scale = 0.1;
+
     tab_node(
         UiTabVariant::Camera,
         children![
+            observed_checkbox((), "Freecam", |change: On<ValueChange<bool>>, mut freecam: Single<&mut FreeCameraState,  With<Camera3d>>| {
+                info!("freecam changed: {change:?}");
+                freecam.enabled = change.value;
+            }),
             (
-                vec3_node("Position", ["X", "Y", "Z"], Vec3::ZERO, Vec3::new(0.43, 0.81, 0.01), Vec3::splat(3.), IVec3::splat(2)),
+                vec3_node("Position", ["X", "Y", "Z"], Vec3::splat(-3.), CAMERA_DEFAULT_TRANSLATION, Vec3::splat(3.), IVec3::splat(2)),
                 observe(
                     |pos: On<Vec3Event>, mut camera: Single<&mut Transform, With<Camera3d>>| {
                         camera.translation = pos.value;
                     }
                 ),
             ),
-            observed_checkbox((), "Freecam", |change: On<ValueChange<bool>>, mut freecam: Single<&mut FreeCameraState,  With<Camera3d>>| {
-                info!("freecam changed: {change:?}");
-                freecam.enabled = change.value;
-            }),
+            (
+                vec3_node("Lens radial", ["k1", "k2", "k3"], Vec3::NEG_ONE * lens_dist_scale, Vec3::ZERO, Vec3::ONE * lens_dist_scale, IVec3::splat(4)),
+                observe(
+                    |values: On<Vec3Event>, mut dist: Single<&mut LensDistortion, With<Camera3d>>| {
+                        info!("updating lens distortion k");
+                        let [k1,k2,k3] = values.value.to_array();
+                        dist.k1 = k1;
+                        dist.k2 = k2;
+                        dist.k3 = k3;
+                    }
+                ),
+            ),
+            (
+                vec2_node("Lens tangential", ["p1", "p2"], Vec2::NEG_ONE * lens_dist_scale, Vec2::ZERO, Vec2::ONE * lens_dist_scale, IVec2::splat(4)),
+                observe(
+                    |values: On<Vec2Event>, mut dist: Single<&mut LensDistortion, With<Camera3d>>| {
+                        info!("updating lens distortion p");
+                        let [p1,p2] = values.value.to_array();
+                        dist.p1 = p1;
+                        dist.p2 = p2;
+                    }
+                ),
+            ),
             // Projection
             text_big("Projection"),
             (
@@ -1609,6 +1729,15 @@ fn root_node(camera_entity: Entity, scene_image: &Handle<Image>) -> impl Bundle 
                 let cols = settings.cols;
                 let rows = settings.rows;
 
+                let mm = settings.square_size * 1e3; // to mm
+                let rounded = mm.round();
+                assert!(
+                    (mm - rounded).abs() < f32::EPSILON * 10.0,
+                    "Float is not close to a whole number! {mm} vs {rounded}, diff={}",
+                    mm - rounded
+                );
+                let mm = mm as usize;
+
                 commands.spawn(Screenshot(camera.target.clone())).observe(
                     move |capture: On<ScreenshotCaptured>| {
                         info!("saving screenshot capture..");
@@ -1618,7 +1747,9 @@ fn root_node(camera_entity: Entity, scene_image: &Handle<Image>) -> impl Bundle 
                             .try_into_dynamic()
                             .unwrap()
                             .to_rgb8()
-                            .save(format!("screenshots/checkerboard_{cols}x{rows}_{t}.png"))
+                            .save(format!(
+                                "screenshots/checkerboard_rows={rows}_cols={cols}_squares_mm={mm}_time={t}.png"
+                            ))
                             .unwrap();
                     },
                 );

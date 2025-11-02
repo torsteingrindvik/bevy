@@ -44,13 +44,14 @@ fn fragment_main(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // Values may now be out of range after distortion.
     xy = (xy + 1.0) / 2.;
 
-    var color = textureSampleLevel(
-        source_texture,
-        source_sampler,
-        xy,
-        0.0,
-    ).rgb;
-
-
-    return vec4(color, 1.0);
+    if ((xy.x < 0.0) || (xy.y < 0.0) || (xy.x > 1.0) || (xy.y > 1.0)) {
+        return vec4(vec3(0.0), 1.0);
+    } else {
+        return vec4(textureSampleLevel(
+            source_texture,
+            source_sampler,
+            xy,
+            0.0,
+        ).rgb, 1.0);
+    }
 }
